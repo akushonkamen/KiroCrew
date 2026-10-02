@@ -243,7 +243,15 @@ def _url_payload_command(n: int) -> str:
 #: deny-exception check both passes of ``is_denied`` share, which reads a deny
 #: exception through kiro-cli's one ``Running: `` title prefix so a shell title
 #: earns exactly its command's carve-out. No glob, verb or eligibility test moved.
-_PACKAGE_LINE_BUDGET = 28_844
+#:
+#: Raised again, from 28,844, for ``_deny_pattern_passes``: ``is_denied``'s
+#: whole-string and per-segment passes moved, unchanged, into one helper so that
+#: ``is_denied_synthesized_target(..., segments=True)`` can run them over the
+#: operator's own rules for a shell title kiro-cli cut short -- a rule anchored to
+#: one chained command of that title would otherwise stop firing. No new rule, no new
+#: matching logic and no floor change: the growth is the helper's signature, the flag
+#: and its docstring.
+_PACKAGE_LINE_BUDGET = 28_877
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

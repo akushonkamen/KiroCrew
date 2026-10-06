@@ -3,7 +3,7 @@
 import type { UiGuidePlan } from './types'
 
 /** The `build_digest` of the packaged index this bundle was built with (see `guideBuildDigest`). */
-export const GUIDE_BUILD_DIGEST = "sha256:515ce57654d554c6a834d0265b68ac48329e0a09c23bf5ab3246cb9ad54d5daa"
+export const GUIDE_BUILD_DIGEST = "sha256:e885e62d6d47eedb7992eb54a65f4e05b1bda51a158bac9fc1953939ed449bcb"
 
 /** Curated location ids: the only ids a live observation may name. */
 export const GUIDE_OBSERVABLE_IDS: readonly string[] = [
@@ -33,6 +33,7 @@ export const GUIDE_OBSERVABLE_IDS: readonly string[] = [
   "artifacts.add-menu",
   "artifacts.deploy",
   "artifacts.detail.comments",
+  "artifacts.detail.more",
   "artifacts.detail.move-to-folder",
   "artifacts.detail.versions",
   "artifacts.import",
@@ -192,6 +193,10 @@ export const GUIDE_REVEAL_SCOPES = {
   "menu:artifacts.add-menu": {
     "kind": "menu",
     "revealer": "artifacts.add-menu"
+  },
+  "menu:artifacts.detail.more": {
+    "kind": "menu",
+    "revealer": "artifacts.detail.more"
   },
   "menu:chat.side-panel.add": {
     "kind": "menu",
@@ -617,7 +622,7 @@ export const GUIDE_PLANS: Readonly<Record<string, UiGuidePlan>> = {
   },
   "artifacts.detail.comments": {
     "version": 2,
-    "label_key": "pages.artifactDetailPage.toggle_comments",
+    "label_key": "pages.artifactDetailPage.show_comments",
     "placements": [
       {
         "id": "any",
@@ -632,9 +637,40 @@ export const GUIDE_PLANS: Readonly<Record<string, UiGuidePlan>> = {
             "entity": "artifact"
           },
           {
+            "id": "any:artifacts.detail.more",
+            "location": "artifacts.detail.more",
+            "label_key": "pages.artifactDetailPage.more_actions",
+            "scope": "menu:artifacts.detail.more"
+          },
+          {
             "id": "any:artifacts.detail.comments",
             "location": "artifacts.detail.comments",
-            "label_key": "pages.artifactDetailPage.toggle_comments"
+            "label_key": "pages.artifactDetailPage.show_comments"
+          }
+        ]
+      }
+    ]
+  },
+  "artifacts.detail.more": {
+    "version": 2,
+    "label_key": "pages.artifactDetailPage.more_actions",
+    "placements": [
+      {
+        "id": "any",
+        "route": "/artifacts",
+        "steps": [
+          {
+            "id": "any:select:artifact_open",
+            "kind": "select",
+            "location": "artifacts.list",
+            "label_key": "pages.artifactsPage.your_artifacts",
+            "selection": "artifact_open",
+            "entity": "artifact"
+          },
+          {
+            "id": "any:artifacts.detail.more",
+            "location": "artifacts.detail.more",
+            "label_key": "pages.artifactDetailPage.more_actions"
           }
         ]
       }

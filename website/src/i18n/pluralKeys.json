@@ -258,5 +258,6 @@
   "components.questionCard.chars_left",
   "components.questionCard.answer_at_limit",
   "apps.commandBar.attention_more",
-  "components.changeCards.scope_count"
+  "components.changeCards.scope_count",
+  "pages.chat.activityViewer.tool_calls_not_listed"
 ]

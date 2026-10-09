@@ -90,6 +90,12 @@ export function invalidateRefreshQueries(qc: QueryClient): void {
   // (api/membersQuery.ts) and refreshes with the registry.
   qc.invalidateQueries({ queryKey: ['kirocrew-agents'] })
   qc.invalidateQueries({ queryKey: ['default-agent'] })
+  // A default-template write is pushed as an "agents" refresh, so another open
+  // window's default bar picks up the new pick and the roster beside it
+  // re-reads the row marker for it. Exact on the roster: a template's detail
+  // carries no such marker and need not refetch on every frame.
+  qc.invalidateQueries({ queryKey: ['default-template'] })
+  qc.invalidateQueries({ queryKey: ['agent-templates'], exact: true })
   qc.invalidateQueries({ queryKey: ['workspaces'] })
   qc.invalidateQueries({ queryKey: ['kirocrewConfig'] })
   // These answers derive from the config AND, for an `auto` default, the

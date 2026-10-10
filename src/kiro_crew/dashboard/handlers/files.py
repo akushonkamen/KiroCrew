@@ -246,6 +246,11 @@ from kiro_crew.dashboard.state import (  # noqa: F401
     append_and_surface,
     load_window_off_loop,
 )
+from kiro_crew.dashboard.upload_limits import (  # noqa: F401
+    bytes_to_mb_figure,
+    knowledge_ceiling_bytes,
+    upload_max_bytes,
+)
 from kiro_crew.doc_blocks import extract_blocks  # noqa: F401
 from kiro_crew.doc_parser import extract_slides, extract_text, join_slides  # noqa: F401
 from kiro_crew.git_config_hooks import (  # noqa: F401

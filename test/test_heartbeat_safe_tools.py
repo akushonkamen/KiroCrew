@@ -521,3 +521,43 @@ class TestHeartbeatHooks:
         # The bundled "kirocrew browse *" pattern would auto-approve this in
         # the user-scoped hooks, but must NOT in the heartbeat scope.
         assert hb.on_tool_call("Running: kirocrew browse foo").action != TOOL_AUTO_APPROVE
+
+    @staticmethod
+    def _mcp_read(mgr, server: str, tool: str) -> str:
+        """An identity-verified MCP frame whose ACP kind says read."""
+        return mgr.on_tool_call(
+            f"Running: @{server}/{tool}",
+            tool_kind="read",
+            mcp_server_name=server,
+            mcp_tool_name=tool,
+            mcp_identity_trusted=True,
+        ).action
+
+    @pytest.mark.parametrize(
+        ("server", "tool"), [("kirocrew-core", "artifact_delete"), ("atlassian", "createJiraIssue")]
+    )
+    def test_preserves_user_confirm_tools(self, server: str, tool: str) -> None:
+        """A confirm-listed MCP call labelled read reaches ``_heartbeat_approval``."""
+        from kiro_crew.hooks import TOOL_AUTO_APPROVE
+        from kiro_crew.slack.gateway import _build_heartbeat_hooks
+
+        hb = _build_heartbeat_hooks(self._user_hooks(confirm_tools=[f"@{server}/{tool}"]))
+        assert self._mcp_read(hb, server, tool) != TOOL_AUTO_APPROVE
+        assert hb._config.confirm_tools == [f"@{server}/{tool}"]  # noqa: SLF001
+
+    def test_preserves_an_unknown_confirm_list(self) -> None:
+        from kiro_crew.hooks import TOOL_AUTO_APPROVE
+        from kiro_crew.slack.gateway import _build_heartbeat_hooks
+
+        hb = _build_heartbeat_hooks(self._user_hooks(confirm_tools_unknown=True))
+        assert self._mcp_read(hb, "atlassian", "getJiraIssue") != TOOL_AUTO_APPROVE
+        assert hb._config.confirm_tools_unknown  # noqa: SLF001
+
+    def test_a_read_the_confirm_list_does_not_name_is_unchanged(self) -> None:
+        from kiro_crew.slack.gateway import _build_heartbeat_hooks
+
+        listed = _build_heartbeat_hooks(self._user_hooks(confirm_tools=["@atlassian/create*"]))
+        unset = _build_heartbeat_hooks(self._user_hooks())
+        assert self._mcp_read(listed, "atlassian", "getJiraIssue") == self._mcp_read(
+            unset, "atlassian", "getJiraIssue"
+        )

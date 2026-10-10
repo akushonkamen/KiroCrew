@@ -899,19 +899,32 @@ def _operator_confirms(facts: GateFacts, grant_targets: tuple[str, ...]) -> bool
 
     Matched against every spelling the grant could be keyed on -- the grant
     targets, the title, the normalized name and, for an MCP call, the bare
-    ``@server`` -- because this can only withhold a grant, never give one.
+    ``@server`` -- because this can only withhold a grant, never give one. A
+    list the load could not read (``confirm_tools_unknown``) names every call,
+    whatever patterns the load kept.
+
+    That flag is set when ``facts.config`` is built, and a torn edit the config
+    watcher rides out builds no new config, so a call no kept pattern names
+    also asks the watcher's current state
+    (``governance.confirm_tools_unknown_now``): while the file it cannot read
+    may hold the list, the call asks.
     """
+    from kiro_crew.platform.governance import confirm_tools_unknown_now
+
+    if getattr(facts.config, "confirm_tools_unknown", False):
+        return True
     patterns = facts.config.confirm_tools
-    if not patterns:
-        return False
-    call = facts.call
-    targets = [*grant_targets, call.title, facts.normalized]
-    if call.mcp_server:
-        tool_ref = mcp_identity_ref(call.mcp_server, call.mcp_tool)
-        targets += [tool_ref, f"Running: {tool_ref}", mcp_identity_ref(call.mcp_server, "")]
-    return any(
-        target and _tool_matches(pattern, target) for pattern in patterns for target in targets
-    )
+    if patterns:
+        call = facts.call
+        targets = [*grant_targets, call.title, facts.normalized]
+        if call.mcp_server:
+            tool_ref = mcp_identity_ref(call.mcp_server, call.mcp_tool)
+            targets += [tool_ref, f"Running: {tool_ref}", mcp_identity_ref(call.mcp_server, "")]
+        if any(
+            target and _tool_matches(pattern, target) for pattern in patterns for target in targets
+        ):
+            return True
+    return confirm_tools_unknown_now()
 
 
 def _tier_operator_grants(facts: GateFacts, tier: GateTier) -> ToolHookResult | None:
@@ -1011,6 +1024,15 @@ def _tier_read_only(facts: GateFacts, tier: GateTier) -> ToolHookResult | None:
     flag the interactive path keeps its ACP-kind allow-list and title fallback.
     """
     call = facts.call
+    # An operator's confirm list asks for what it names whatever the call says
+    # about itself, so a confirm-listed MCP call gets no verdict from any branch
+    # below. That includes the shell branch: kiro-cli can classify an MCP-served
+    # execute frame as shell, and such a tool runs outside the agent sandbox, so
+    # the command text the bash classifier reads does not bound what it does. The
+    # ACP kind and the title are agent-influenced too. While the list is unknown
+    # every MCP call asks; built-ins keep the classifier.
+    if call.mcp_server and _operator_confirms(facts, (call.title, facts.normalized)):
+        return None
     if call.is_shell:
         # A shell read-only classification uses the deny-by-default bash
         # classifier (rejects redirects/substitution/backgrounding). A command that

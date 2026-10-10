@@ -260,6 +260,9 @@ def _build_heartbeat_hooks(user_hooks: HookManager) -> HookManager:
       - sensitive-path deny (always-on, structural — not from user config)
       - the user's ``auto_deny_tools`` (denies are safe; users can only
         narrow, not widen, what runs in heartbeat)
+      - the user's ``confirm_tools`` and whether that list could be read
+        (``confirm_tools_unknown``): a confirm-listed MCP call gets no verdict
+        from the read-only tier, so it reaches ``_heartbeat_approval`` too
 
     They drop:
       - ``auto_approve_tools`` (set to empty so ``HEARTBEAT_SAFE_TOOLS`` is
@@ -274,6 +277,10 @@ def _build_heartbeat_hooks(user_hooks: HookManager) -> HookManager:
     scoped = HooksConfig(
         auto_approve_tools=[],
         auto_deny_tools=list(user_cfg.auto_deny_tools),
+        # The confirm list only withholds verdicts, so carrying it can narrow
+        # what a heartbeat settles without the allowlist, never widen it.
+        confirm_tools=list(user_cfg.confirm_tools),
+        confirm_tools_unknown=user_cfg.confirm_tools_unknown,
         # Denied-command opt-out state carries over: denies can only narrow what
         # runs in a heartbeat session, never widen it, so the effective built-in
         # ruleset (and user-added denies) must apply here too.

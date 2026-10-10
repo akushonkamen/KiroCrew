@@ -87,6 +87,10 @@ from kiro_crew.hook_runtime.descriptor_identity import (  # noqa: F401
     _opened_path_within_root,
     _validated_name_holds,
 )
+
+# compose() runs the gate tiers on this module's globals, so every helper a tier
+# calls (``_operator_confirms`` for the operator-grants tier included) must be
+# bound here, not only in gate_tiers.
 from kiro_crew.hook_runtime.gate_tiers import (  # noqa: F401
     GateFacts,
     _operator_confirms,
@@ -683,6 +687,11 @@ class HooksConfig:
     #: ``auto_approve_tools`` grant. Empty by default: nothing changes unless the
     #: operator lists something.
     confirm_tools: list[str] = field(default_factory=list)
+    #: Set when the load could not read a config file that names
+    #: ``confirm_tools`` (``governance.confirm_tools_unknown``), whatever list it
+    #: kept. The gate then withholds every ``auto_approve_tools`` grant, since the
+    #: patterns it would have checked are not known. Derived state, never serialized.
+    confirm_tools_unknown: bool = field(default=False, compare=False)
     auto_replies: list[AutoReplyHook] = field(default_factory=list)
     transforms: list[TransformHook] = field(default_factory=list)
     context_rules: list[ContextRule] = field(default_factory=list)
@@ -892,13 +901,24 @@ class HookManager:
             ),
         }
         flipped = sorted(k for k, v in flags.items() if v)
-        if added or removed or flipped:
+        # Removing a ``confirm_tools`` pattern widens too: the gate stops asking
+        # for the calls it named.
+        confirm_added = len(set(after.confirm_tools) - set(before.confirm_tools))
+        confirm_removed = len(set(before.confirm_tools) - set(after.confirm_tools))
+        confirm_note = (
+            f" confirm_added={confirm_added} confirm_removed={confirm_removed}"
+            if confirm_added or confirm_removed
+            else ""
+        )
+        if added or removed or flipped or confirm_note:
             logger.warning(
                 "hooks: auto-approval set changed via config reload (+%d/-%d tool(s), "
-                "flags: %s)",
+                "flags: %s, confirm: +%d/-%d)",
                 added,
                 removed,
                 ",".join(flipped) or "none",
+                confirm_added,
+                confirm_removed,
             )
             sel().log_api_access(
                 caller="config",
@@ -908,6 +928,7 @@ class HookManager:
                 resources=(
                     f"added={added} removed={removed} size={len(after.auto_approve_tools)}"
                     + (f" flags={','.join(flipped)}" if flipped else "")
+                    + confirm_note
                 ),
             )
 

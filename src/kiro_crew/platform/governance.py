@@ -4764,25 +4764,134 @@ def strip_ungoverned_auto_approve(
     return out
 
 
-def _confirm_tool_patterns() -> tuple[str, ...]:
+def _confirm_tool_patterns() -> tuple[str, ...] | None:
     """The operator's ``hooks.confirm_tools`` patterns from ``config.json``.
 
-    An unreadable config yields no patterns, which is the behaviour of an
-    operator who never set the key: the list only ever withholds a grant, so
-    reading nothing cannot widen one.
+    ``()`` means no pattern is set. ``None`` means the operator may have set
+    patterns this read cannot see; the static writers then withhold every MCP
+    grant and the gate withholds every operator grant.
+
+    A load can stand in defaults for settings it could not read: the read
+    raised, a file did not parse (whole-config degradation, an unreadable base
+    file), or a ``hooks`` section is not an object. Those defaults cannot show
+    the list is empty, and they cannot show it is set either, so the files on
+    disk decide (:func:`_config_files_state`). While a file does not read as
+    written NOW, the list is unknown if some config file names the key.
+    Otherwise the loaded values stand: defaults for a torn file that never
+    names the key (every grant stays as it is with the key unset), the
+    watcher's last good values while it keeps them, and the real values once
+    the loader's process-lifetime degradation flag has gone stale.
     """
+    loaded = True
     try:
         from kiro_crew.config import live
         from kiro_crew.config.loader import KiroCrewConfig
+        from kiro_crew.config.resolution import DEGRADED_WHOLE_CONFIG
 
-        hooks = (live.snapshot() or KiroCrewConfig.load()).hooks
-        raw = hooks.get("confirm_tools") if isinstance(hooks, dict) else None
+        cfg = live.snapshot() or KiroCrewConfig.load()
+        degraded: frozenset[str] = getattr(cfg, "degraded_sections", frozenset())
+        hooks = cfg.hooks
+        stood_in = (
+            DEGRADED_WHOLE_CONFIG in degraded
+            or "hooks" in degraded
+            or bool(getattr(cfg, "_base_unreadable", False))
+            or not isinstance(hooks, (dict, type(None)))
+        )
     except Exception:  # noqa: BLE001 — a config read must not break a writer
-        logger.debug("hooks.confirm_tools unreadable; no confirm patterns", exc_info=True)
+        logger.warning("config read failed; judging hooks.confirm_tools from the files")
+        logger.debug("hooks.confirm_tools read failed", exc_info=True)
+        hooks, stood_in, loaded = None, True, False
+    if stood_in:
+        torn, names_key = _config_files_state()
+        if (torn or not loaded) and names_key:
+            return None
+        if not loaded:
+            return ()
+        # Every file reads as written, or none that does not names the key:
+        # the loaded values below are the whole story.
+    if not isinstance(hooks, dict) or "confirm_tools" not in hooks:
         return ()
+    raw = hooks["confirm_tools"]
     if not isinstance(raw, list):
-        return ()
+        # The operator wrote the key but not as a list: what they meant to
+        # confirm cannot be read, so it is unknown, not empty.
+        return None
     return tuple(p for p in raw if isinstance(p, str))
+
+
+def _config_files_state() -> tuple[bool, bool]:
+    """``(torn, names_key)`` for the config files on disk now.
+
+    *torn*: a present ``config.json`` / ``config.local.json`` cannot be read,
+    does not parse as a JSON object, or holds a ``hooks`` value that is not an
+    object -- the cases where a load stands in defaults. *names_key*: some file
+    names the ``confirm_tools`` key, or cannot be read at all (bytes that cannot
+    be read cannot show the key unset). Only an operator who wrote the key can
+    have asked for a confirmation, so a torn file without it (a trailing comma)
+    keeps every grant, Crew's own ``@kirocrew-*`` included.
+    """
+    try:
+        from kiro_crew.config.loader import config_local_path, config_path, read_config_text
+
+        paths = (config_path(), config_local_path())
+    except Exception:  # noqa: BLE001 — a config read must not break a writer
+        logger.debug("config paths unavailable", exc_info=True)
+        return True, True
+    torn = names_key = False
+    for path in paths:
+        try:
+            if not path.exists():
+                continue
+            text = read_config_text(path)
+        except Exception:  # noqa: BLE001 — bytes that cannot be read cannot show the key unset
+            logger.debug("config file unreadable: %s", path, exc_info=True)
+            return True, True
+        names_key = names_key or "confirm_tools" in text
+        try:
+            data = json.loads(text)
+        except ValueError:
+            torn = True
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
+            torn = True
+    return torn, names_key
+
+
+def confirm_tools_unknown() -> bool:
+    """Whether the operator may have set ``hooks.confirm_tools`` patterns no read can see.
+
+    The gate's own ``HooksConfig`` is built from the same degraded load, which can
+    keep a base file's ``auto_approve_tools`` while dropping a torn overlay's
+    ``confirm_tools``; this flag is how it learns to withhold those grants too.
+    """
+    return _confirm_tool_patterns() is None
+
+
+def confirm_tools_unknown_now() -> bool:
+    """:func:`confirm_tools_unknown` as the config watcher holds it now, for the gate.
+
+    The gate's ``HooksConfig`` flag is set when that config is built. A tear the
+    watcher rides out builds none: it keeps the last good values, so nothing
+    changed and nothing is dispatched, yet the overlay it cannot read may hold
+    the patterns. The watcher's snapshot does carry the tear's degradation flag,
+    and while it does the files on disk decide, so the gate asks this on each
+    call it would otherwise settle.
+
+    Without a running watcher no reload replaces the gate's config, and the flag
+    set when it was built is the answer: this returns False without loading
+    anything. A watcher that cannot be read answers True, toward a confirmation.
+    The cost is attribute reads until the process has seen a degraded load, and
+    two config file reads per call after that.
+    """
+    try:
+        from kiro_crew.config import live
+
+        if live.snapshot() is None:
+            return False
+    except Exception:  # noqa: BLE001 — an unreadable watcher must not grant
+        logger.debug("config watcher unreadable; treating hooks.confirm_tools as unknown")
+        return True
+    return confirm_tools_unknown()
 
 
 def server_requires_confirmation(server: str, patterns: Sequence[str]) -> bool:
@@ -4819,11 +4928,35 @@ def server_requires_confirmation(server: str, patterns: Sequence[str]) -> bool:
 
 
 def _operator_requires_confirmation(ref: str) -> bool:
-    """Whether ``hooks.confirm_tools`` names the MCP server ``ref`` grants."""
-    if not ref.startswith("@"):
+    """Whether ``hooks.confirm_tools`` names, or may name, the MCP server ``ref`` grants.
+
+    A list the operator may have set but that cannot be read now counts as
+    naming every server, so the grant is withheld and the gate settles each call
+    (see :func:`_confirm_tool_patterns`).
+
+    A grant ref is itself a pattern: ``*`` or ``@*`` covers every MCP call, and
+    ``@ser*`` covers every server whose name starts ``ser``. Such a ref is
+    withheld whenever any confirm pattern is listed, since the servers it covers
+    are not known here. A ref without a wildcard in its server segment is judged
+    for that one server. A ref whose literal prefix cannot begin with ``@`` (a
+    builtin such as ``fs_*``) covers no MCP call.
+    """
+    if not isinstance(ref, str):
         return False
-    server = ref[1:].partition("/")[0]
-    return bool(server) and server_requires_confirmation(server, _confirm_tool_patterns())
+    cut = min((i for i, ch in enumerate(ref) if ch in "*?["), default=-1)
+    literal = ref if cut < 0 else ref[:cut]
+    if not literal.startswith("@") and literal != "":
+        return False
+    server, sep, _ = literal[1:].partition("/")
+    names_one_server = literal.startswith("@") and bool(server) and (sep or cut < 0)
+    if not names_one_server and cut < 0:
+        return False
+    patterns = _confirm_tool_patterns()
+    if patterns is None:
+        return True
+    if not names_one_server:
+        return bool(patterns)
+    return server_requires_confirmation(server, patterns)
 
 
 def may_skip_gate_now(ref: str) -> bool:
@@ -4841,7 +4974,24 @@ def may_skip_gate_now(ref: str) -> bool:
     from ``current_context()`` means "ungoverned host, keep every grant"; an
     exception means "there may be a ceiling and we cannot read it", and answering
     "skip the gate" to that is the bypass itself.
+
+    The operator's own ``hooks.confirm_tools`` opt-in withholds too: a server it
+    names asks on every call, so no writer may grant it statically.
     """
+    return _policy_may_skip_gate_now(ref) and not _operator_requires_confirmation(ref)
+
+
+def withheld_by_confirm_tools(ref: str) -> bool:
+    """Whether ``hooks.confirm_tools``, and not the security policy, withholds ``ref``'s grant.
+
+    For a writer that explains a withheld grant (doctor), so an operator's own
+    confirm list is not reported as an enterprise ceiling.
+    """
+    return _policy_may_skip_gate_now(ref) and _operator_requires_confirmation(ref)
+
+
+def _policy_may_skip_gate_now(ref: str) -> bool:
+    """The security-policy half of :func:`may_skip_gate_now`: ceiling and profiles."""
     try:
         from kiro_crew.platform.context import current_context
 
@@ -4850,10 +5000,6 @@ def may_skip_gate_now(ref: str) -> bool:
         logger.warning("cannot resolve the governance ceiling; not auto-approving %r", ref)
         return False
     if not may_skip_gate(ref, ceiling):
-        return False
-    # The operator's own opt-in: a server ``hooks.confirm_tools`` names asks on
-    # every call, so no writer may grant it statically.
-    if _operator_requires_confirmation(ref):
         return False
     # The POLICY ceiling permits (or is absent) — but governance is
     # ``policy ∩ profile``, and a Level-2 PROFILE can govern this ref even with NO

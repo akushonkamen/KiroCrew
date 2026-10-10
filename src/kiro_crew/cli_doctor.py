@@ -187,7 +187,11 @@ from kiro_crew.platform import (
 )
 from kiro_crew.platform.capability_bound import bind_capability_manager
 from kiro_crew.platform.defaults import DefaultCapabilityManager
-from kiro_crew.platform.governance import CU_MCP_SERVER, may_skip_gate_now
+from kiro_crew.platform.governance import (
+    CU_MCP_SERVER,
+    may_skip_gate_now,
+    withheld_by_confirm_tools,
+)
 from kiro_crew.platform.tool_names import (
     kas_verified_releases,
     kas_vocabulary_drift,
@@ -884,11 +888,13 @@ def _doctor_mcp_tools(
         # both whether doctor may mint a grant and whether an existing one stands.
         # A grant is the bare ref or any per-tool ``@server/tool`` spelling of it.
         granted = any(mcp_ref_owned_by(t, (name,)) for t in allowed)
+        # The operator's own ``hooks.confirm_tools`` withholds through the same
+        # chokepoint; name it, so it does not read as an enterprise ceiling.
+        by_confirm = withheld_by_confirm_tools(ref)
         if not may_skip_gate_now(ref) and granted and declined:
             config_changed = True
-            issues.append(
-                f"{ref} auto-approve forbidden by ceiling (repair from the owning install)"
-            )
+            cause = "withheld by hooks.confirm_tools" if by_confirm else "forbidden by ceiling"
+            issues.append(f"{ref} auto-approve {cause} (repair from the owning install)")
         elif not may_skip_gate_now(ref):
             # REVOKE, not merely "do not add". A grant can predate the ceiling —
             # the policy arrives on a host whose config was written while it was
@@ -915,7 +921,8 @@ def _doctor_mcp_tools(
                         outcome="ok",
                         source="cli_doctor",
                         resources=(
-                            f"{ref} auto-approve revoked (governance ceiling); "
+                            f"{ref} auto-approve revoked "
+                            f"({'hooks.confirm_tools' if by_confirm else 'governance ceiling'}); "
                             "calls go through the approval gate"
                         ),
                     )
@@ -924,7 +931,8 @@ def _doctor_mcp_tools(
             # Governed hosts otherwise give no reason why a server the user
             # enabled still prompts on every call — say it once, here, so
             # `kirocrew doctor` explains it.
-            print(f"  {ref}: 🔒 auto-approve withheld by security policy — calls will prompt")
+            source = "hooks.confirm_tools" if by_confirm else "security policy"
+            print(f"  {ref}: 🔒 auto-approve withheld by {source} — calls will prompt")
         elif ref not in allowed and name not in _NO_BLANKET_ALLOW_MCPS and not gate_closed:
             # Computer use is never blanket-allowed here: see _NO_BLANKET_ALLOW_MCPS.
             # A pre-existing user-made grant is left alone (doctor never REMOVES a

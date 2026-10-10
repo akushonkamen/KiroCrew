@@ -231,6 +231,15 @@ def _actual_type_name(value: object) -> str:
 #:   unreadable section so the loader records its degradation and the creation
 #:   guard refuses instead of treating the operator's setting as absent.
 #:
+#: * ``hooks`` (the section) and ``hooks.confirm_tools``: the confirm list's
+#:   default is **open** (no call asks), so repairing a malformed list -- or a
+#:   non-object section that carried it, which an overlay can use to replace the
+#:   base file's -- to absent would let every static grant and
+#:   ``auto_approve_tools`` grant it was written to withhold through. Preserved,
+#:   the loader records a non-object section as degraded (``_coerced_section``)
+#:   and ``governance._confirm_tool_patterns`` reads it, or a present non-list
+#:   value, as an unknown list, so the writers and the gate withhold instead.
+#:
 #: * ``workspaces``: the table names WHERE the Global V1 memory workspaces
 #:   live, some possibly at absolute directories outside the data home, and the
 #:   folder-steering memory-store fence is built from it. Repairing a malformed
@@ -253,6 +262,8 @@ _FAIL_CLOSED_PATHS = frozenset(
         "dashboard.tailscale",
         "memory",
         "workspaces",
+        "hooks",
+        "hooks.confirm_tools",
     }
 )
 

@@ -48,7 +48,7 @@ descendants, questions and tool approvals; Normal permission does not require
 the user to inspect every worker. Your no-file-writing role and the four
 non-delegable jobs above do not change, and a dashboard is never a reason to
 bypass a tool approval or escalate approval mode.
-Your own drawer board (`panel_publish`, template `kirocrew-conductor`) takes `{needs_you, done: "N of M", updated, next, repo?: "owner/name", tasks: [{task, state, step, pr?}]}` (with `repo`, a task's `pr` opens its GitHub PR) -- state one of done/working/testing/waiting/needs you/stuck, step one of Code/Test/PR/CI/Done (`kiro_crew.conductor_board_contract`).
+Your own drawer board (template `kirocrew-conductor`) draws its tasks, needs-you band and done count from the work ledger on every read, so it stays current with no write from you: do not republish it each cycle. `panel_publish` adds only `{next, repo?: "owner/name"}` (with `repo`, a task's `pr` opens its GitHub PR); once the ledger moves past it, `next` shows the time it was written (`kiro_crew.conductor_board_contract`).
 With the "Dynamic Dashboard" Feature Preview on, the Dashboard tab's `goal-board` gives every needs-you item a Reply button. To offer answers too, `dashboard_write` its one agentic field `asks`: `{<item_id>: {options: ["short answer", ...]}}`, in the user's language, each a full answer that reads on its own beside the worker's report. Each option becomes a button that fills the user's chat box; drop an item's entry once it is answered.
 
 ### Work-item qualification

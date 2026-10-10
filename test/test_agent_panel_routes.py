@@ -862,9 +862,9 @@ async def test_the_response_comes_from_a_single_record_read(vetted, monkeypatch)
         reads: list[str] = []
         real = routes._panel_record
 
-        def counting(slot: str, slug: str, owner_key: str):
+        def counting(slot: str, slug: str, owner_key: str, **kw: Any):
             reads.append(slug)
-            return real(slot, slug, owner_key)
+            return real(slot, slug, owner_key, **kw)
 
         monkeypatch.setattr(routes, "_panel_record", counting)
         body = await (await c.get(f"/api/members/{SLUG}/panel?member={CREW}")).json()
@@ -3392,3 +3392,40 @@ async def test_a_publish_the_template_cannot_read_is_refused_with_its_keys(vette
 
     for field in ConductorBoardPanel.__annotations__:
         assert field in body["error"], f"the refusal does not name {field!r}"
+
+
+async def test_a_ledger_board_is_served_only_to_the_crew_that_owns_the_slug(vetted):
+    """A caller-chosen ``member`` cannot read another crew's ledger as its own board."""
+    from kiro_crew.config.paths import config_dir
+
+    conductor = "kirocrew-conductor"
+    (config_dir() / "config.json").write_text(
+        json.dumps({"agents": {conductor: {"kiro_agent": "kirocrew"}}}), encoding="utf-8"
+    )
+    unit = _unit_for(conductor)
+    slot = _crew_slot(conductor)
+    for payload in (
+        {"action": "goal", "goal": "g", "round": 0},
+        {
+            "action": "create",
+            "item_id": "it_00000001",
+            "title": "the conductor's own task",
+            "acceptance": {"kind": "human_approval"},
+            "round": 0,
+        },
+    ):
+        entry = {"slot": slot, "actor": "conductor", "by": slot, **payload}
+        assert crew_log_emit.on_work_recorded(unit, entry, timeout=5.0) is True
+    crew_log_emit.flush(timeout=5.0)
+    crew_log_projection.forget_slot_folds()
+    slug = members_mod.member_slug(conductor)
+
+    async with _client(conductor) as c:
+        foreign = await (
+            await c.get(f"/api/members/{slug}/panel", params={"member": "other-crew"})
+        ).json()
+        own = await (await c.get(f"/api/members/{slug}/panel", params={"member": conductor})).json()
+
+    assert foreign == {"panel": None, "html": None}
+    assert own["panel"]["template"] == conductor
+    assert "the conductor's own task" in own["html"]

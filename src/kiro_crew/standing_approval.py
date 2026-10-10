@@ -49,8 +49,11 @@ caller can take. This module is READ-ONLY on purpose.
 Migrating an existing declaration
 ---------------------------------
 An operator who set ``agent.dangerously_skip_permissions: true`` in ``config.json``
-keeps the standing grant: the key is a DEPRECATED ALIAS that still grants on every
-platform, so no one loses the grant on upgrade. The deprecation is announced rather
+keeps the standing grant wherever the keystone mask is unavailable (Windows, delegated
+macOS, ``sandbox: off``): the key is a DEPRECATED ALIAS that still grants there. On a
+masked Linux/macOS host the alias is refused fail-safe and the operator moves the
+declaration to the keystone, so the grant is read only from a leaf the agent cannot
+open. The deprecation is announced rather
 than silent: :func:`migration_notice` returns the words a startup logs when the key is
 set and the keystone is absent, naming the keystone to move to. The key is slated to
 stop granting in a future release, which needs a recorded decision first.
@@ -248,54 +251,19 @@ def _read_all() -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _keystone_is_masked(requested_mode: str) -> bool:
-    """Whether the sandbox this host builds for an agent spawn covers the keystone.
+def _mask_covers_leaf(requested_mode: str) -> bool:
+    """Whether Crew's own sandbox for *requested_mode* actually covers the keystone leaf.
 
-    The document's authority rests on the mask, not on its own contents: an agent
-    subprocess that can see the real data home creates the directory and writes the
-    grant itself, and the next startup reads what that subprocess wrote as the
-    operator's standing authority. So the grant counts only where the mask holding
-    the leaf out of an agent's reach is actually in force.
-
-    Two predicates in :mod:`sandbox` already answer when the mask is skipped, and each
-    says in its own docstring that a control whose security argument depends on the mask
-    must not carry a copy of that reasoning. This composes them rather than re-spelling
-    them, so a future branch that skips the mask is a change to them and reaches this
-    grant for free:
+    This is the DELEGATION-BLIND question: would ``wrap_argv`` thread the hidden-dir set
+    through the backend it selects for this mode, and does that masked target set name
+    the keystone leaf. It does NOT ask whether a particular spawn is handed off -- the two
+    named predicates below layer that on, because the alias and the keystone grant need
+    OPPOSITE answers about a delegated host.
 
     * :func:`sandbox.credential_mask_applies` answers whether ``wrap_argv`` would thread
       the hidden-dir set through the backend it selects for *requested_mode*. It owns the
       clamp to the governed floor, the ``off`` tier, the no-backend host, and the process
-      already running inside a Crew sandbox -- that last one matters here because the
-      outer sandbox deliberately leaves ``~/.aws``, ``~/.ssh`` and ``~/.kube`` readable
-      and is not a substitute for an adapter-specific mask.
-    * :func:`sandbox.spawn_delegates_masking` answers the different question that predicate
-      cannot: on Windows, and on macOS with kiro-cli's internal sandbox enabled, the spawn
-      is handed to kiro-cli. A backend is present, so the first predicate answers True, and
-      yet none of Crew's masks are applied and the leaf is reachable from inside that
-      confinement.
-
-    What is left for this function is the one question neither of them asks: whether the
-    keystone actually sits inside a path the masked target set names.
-
-    **The platform consequence, stated rather than left to be discovered.** Crew's mask
-    is a Linux bind mount or a macOS Seatbelt profile, so the standing grant is
-    available on Linux with a working user namespace and on macOS where Crew's own
-    Seatbelt runs. On Windows it is never available: there is no Windows backend for
-    ``credential_mask_applies`` to find and the spawn is delegated there, so both
-    predicates refuse. On macOS with kiro-cli's internal sandbox enabled it is likewise
-    unavailable, because that configuration is exactly the delegation. This narrows what
-    the declaration can do rather than what the deprecated config key does -- that key
-    is a backwards-compatible alias that still grants on every platform.
-
-    *requested_mode* is REQUIRED, and is the ``agent.sandbox`` value the caller already
-    resolved: a startup must judge the document it is acting on rather than re-read
-    configuration that may have moved underneath it, and every caller holds the value
-    already, so a no-argument form would only be a second way to read it. It is passed
-    through unclamped, because the clamp to the governed floor belongs to
-    ``credential_mask_applies`` and applying it twice here would be the copy this
-    function exists without: a floor raising a requested ``off`` to a confined tier is a
-    masked host and keeps granting, and that predicate is where that is decided.
+      already running inside a Crew sandbox.
 
     ``normpath``, never ``realpath``: the target set is built with ``normpath`` for the
     reason :func:`sandbox._relocated_crew_targets` records, so a link-resolving syscall
@@ -303,8 +271,6 @@ def _keystone_is_masked(requested_mode: str) -> bool:
     """
     try:
         if not sandbox.credential_mask_applies(requested_mode):
-            return False
-        if sandbox.spawn_delegates_masking():
             return False
         leaf = os.path.normpath(str(standing_approval_path()))
         for target in sandbox._crew_hidden_sandbox_targets():
@@ -319,6 +285,67 @@ def _keystone_is_masked(requested_mode: str) -> bool:
             exc_info=True,
         )
         return False
+
+
+def deprecated_alias_is_refused(requested_mode: str) -> bool:
+    """Whether the agent-readable ``config.json`` alias must be REFUSED on this host.
+
+    The alias is agent-readable, so honouring it reopens the ``link(2)`` route the
+    keystone exists to close -- on any host where a Crew-masked spawn is reachable, so the
+    keystone is available as the replacement. That is every host where Crew's mask covers
+    the leaf for SOME spawn:
+
+    * Masked Linux / macOS -> refuse (the keystone is the secure home).
+    * Delegated macOS (kiro-cli's internal sandbox on) -> refuse: delegation covers the
+      kiro-cli spawn ALONE, while a KAS/``--agent-engine v3`` session, an MCP probe or a
+      cron script keeps Crew's Seatbelt mask, so the leaf is masked for them and the
+      agent-reachable alias must not stand.
+    * Native Windows -> NOT refused: there is no Crew OS backend, EVERY spawn is unmasked,
+      the keystone can never be in force, so the alias stays the only standing path and
+      keeps granting (no platform narrowed).
+
+    So the alias is refused wherever Crew's mask covers the leaf AND the host is not the
+    all-spawns-unmasked case (native Windows).
+    """
+    if sandbox.sys.platform == "win32" and sandbox.spawn_delegates_masking():
+        return False
+    return _mask_covers_leaf(requested_mode)
+
+
+def _keystone_is_masked(requested_mode: str) -> bool:
+    """Whether a keystone ``grant.json`` can be TRUSTED as the operator's own on this host.
+
+    The document's authority rests on the mask, not on its own contents: an agent
+    subprocess that can see the real data home creates the directory and writes the grant
+    itself, and the next startup reads what that subprocess wrote as the operator's
+    standing authority. So the grant counts only where NO reachable spawn can write the
+    leaf unmasked.
+
+    This is STRICTER than :func:`deprecated_alias_is_refused`, and the two differ on a
+    delegated macOS host, which is why the predicate is split:
+
+    * Masked Linux / macOS -> honoured: every spawn is Crew-masked, no spawn can author
+      the leaf, so a ``grant.json`` is the operator's.
+    * Delegated macOS (kiro-cli's internal sandbox on) -> NOT honoured: the kiro-cli spawn
+      runs WITHOUT Crew's mask (``_delegate_to_kiro_internal_sandbox``), so an agent on
+      that spawn can reach and write the leaf and startup would trust its own grant. The
+      alias is already refused here (above); the keystone grant must be refused too, so a
+      delegated host honours NEITHER standing source.
+    * Native Windows -> NOT honoured: no Crew backend masks the leaf for any spawn.
+
+    ``requested_mode`` is the live ``agent.sandbox`` the caller resolved immediately
+    before activation (never a boot copy), passed unclamped -- the clamp belongs to
+    :func:`sandbox.credential_mask_applies`.
+    """
+    # Delegation removes Crew's mask for the spawns it hands off. The alias refusal above
+    # tolerates that (a non-kiro-cli spawn still keeps the mask), but TRUSTING a written
+    # grant cannot: on a delegated host at least one reachable spawn (native Windows: all;
+    # macOS internal sandbox: the kiro-cli spawn) runs unmasked and could author the leaf.
+    # So any delegating host refuses to honour the grant, where the alias check refuses
+    # only the native-Windows all-spawns-unmasked case.
+    if sandbox.spawn_delegates_masking():
+        return False
+    return _mask_covers_leaf(requested_mode)
 
 
 def is_declared(requested_mode: str) -> bool:
@@ -385,10 +412,13 @@ def migration_notice(
 ) -> str:
     """The words a startup logs when a DEPRECATED ``config.json`` declaration is in use.
 
-    The config key still grants (First-Principles ruling: it is not retired and platforms
-    are not narrowed), so this notice tells the operator the key is deprecated and names
-    the keystone to migrate to for the secure, mask-protected home. Returned rather than
-    logged here so the two startup paths that establish the declared grant (the
+    Which words depends on the mask. Where the keystone mask is UNAVAILABLE the config key
+    still grants (platforms the keystone cannot cover are not narrowed), so the notice
+    tells the operator the key is deprecated and that nothing need change on this host.
+    Where the mask HOLDS the config key is refused -- it is agent-reachable, so
+    honouring it would reopen the route the keystone closes -- so the notice tells the
+    operator to move the declaration to the keystone, which is available there. Returned
+    rather than logged here so the two startup paths that establish the declared grant (the
     dashboard's and Slack's) word it identically, and so a test can assert on the text an
     operator actually sees instead of on a log call.
 
@@ -428,7 +458,7 @@ def migration_notice(
     when the keystone is ALREADY written on an unmasked host, which is the case where a
     remedy reads most absurdly.
     """
-    on_masked = _keystone_is_masked(requested_mode)
+    on_masked = deprecated_alias_is_refused(requested_mode)
     path = standing_approval_path()
     document = f'{{"{GRANT_FIELD}": true}}'
     if not on_masked:
@@ -442,11 +472,12 @@ def migration_notice(
             "this host; the config key keeps working."
         )
     preamble = (
-        "agent.dangerously_skip_permissions is set in config.json. It still grants the "
-        "standing auto-approve, but it is DEPRECATED: the standing declaration should "
-        f"move to the operator-owned keystone {path}, which an agent sandbox cannot open "
-        "(the config key is an agent-readable document that can be reached through a second "
-        "name, which is why it is being replaced). "
+        "agent.dangerously_skip_permissions is set in config.json. On THIS host it is "
+        "refused: it is DEPRECATED and the key is an agent-readable document that "
+        "can be reached through a second name, so honouring it would let a sandboxed "
+        "process grant itself the standing auto-approve -- which is exactly what the "
+        f"operator-owned keystone {path} prevents (an agent sandbox cannot open it). The "
+        "standing declaration must move to the keystone, which is available here. "
     )
     # Deliberately NOT a runnable redirection command. The crew data-home root is
     # agent-writable, so a symlink could sit at ``path``, and an operator who copy-pastes a

@@ -17651,7 +17651,13 @@
       "fresh_start_confirm_action": "重新开始",
       "fresh_start_hint": "和这位队友开始新的对话。之前的消息仍然可见。",
       "fresh_start_failed_queued": "还有排队的消息。等它们完成后，再试一次重新开始。",
-      "fresh_start_failed_busy": "队友还在工作，没有停下。先停止它，再试一次。"
+      "fresh_start_failed_busy": "队友还在工作，没有停下。先停止它，再试一次。",
+      "dashboard_lock_page": "锁定仪表板",
+      "dashboard_unlock_page": "解锁仪表板",
+      "dashboard_lock_hint": "锁定后，此成员无法用其他布局替换此仪表板，也无法恢复旧布局。",
+      "dashboard_locked_status": "已锁定：此成员仍可刷新显示的数值，但无法更改或恢复布局。",
+      "dashboard_lock_failed": "无法锁定仪表板，它仍未锁定。请重试。",
+      "dashboard_unlock_failed": "无法解锁仪表板，它仍处于锁定状态。请重试。"
     },
     "tasksCapacityCard": {
       "title": "任务与容量",

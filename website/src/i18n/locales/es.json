@@ -18169,7 +18169,13 @@
       "fresh_start_confirm_action": "Empezar de cero",
       "fresh_start_hint": "Empieza una conversación nueva con este compañero. Los mensajes anteriores siguen visibles.",
       "fresh_start_failed_queued": "Aún hay mensajes en cola. Espera a que terminen y vuelve a intentar Empezar de cero.",
-      "fresh_start_failed_busy": "El compañero sigue trabajando y no se detuvo. Detenlo primero y vuelve a intentarlo."
+      "fresh_start_failed_busy": "El compañero sigue trabajando y no se detuvo. Detenlo primero y vuelve a intentarlo.",
+      "dashboard_lock_page": "Bloquear panel",
+      "dashboard_unlock_page": "Desbloquear panel",
+      "dashboard_lock_hint": "Bloquea este panel para que este miembro no lo reemplace por otro diseño ni restaure uno anterior.",
+      "dashboard_locked_status": "Bloqueado: este miembro puede seguir actualizando los valores, pero no cambiar ni restaurar el diseño.",
+      "dashboard_lock_failed": "No se pudo bloquear el panel. Sigue desbloqueado. Inténtalo de nuevo.",
+      "dashboard_unlock_failed": "No se pudo desbloquear el panel. Sigue bloqueado. Inténtalo de nuevo."
     },
     "tasksCapacityCard": {
       "title": "Tareas y capacidad",

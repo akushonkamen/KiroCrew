@@ -17910,7 +17910,13 @@
       "fresh_start_confirm_action": "Neu anfangen",
       "fresh_start_hint": "Startet ein neues Gespräch mit diesem Crewmate. Frühere Nachrichten bleiben sichtbar.",
       "fresh_start_failed_queued": "Es warten noch Nachrichten. Warte, bis sie fertig sind, und versuche Neu anfangen dann erneut.",
-      "fresh_start_failed_busy": "Der Crewmate arbeitet noch und hat nicht gestoppt. Stoppe ihn zuerst und versuche es dann erneut."
+      "fresh_start_failed_busy": "Der Crewmate arbeitet noch und hat nicht gestoppt. Stoppe ihn zuerst und versuche es dann erneut.",
+      "dashboard_lock_page": "Dashboard sperren",
+      "dashboard_unlock_page": "Dashboard entsperren",
+      "dashboard_lock_hint": "Sperre dieses Dashboard, damit dieses Crewmitglied es nicht durch ein anderes Layout ersetzt oder ein älteres wiederherstellt.",
+      "dashboard_locked_status": "Gesperrt: Dieses Crewmitglied kann die angezeigten Werte weiter aktualisieren, aber das Layout nicht ändern oder wiederherstellen.",
+      "dashboard_lock_failed": "Das Dashboard konnte nicht gesperrt werden und bleibt entsperrt. Versuche es erneut.",
+      "dashboard_unlock_failed": "Das Dashboard konnte nicht entsperrt werden und bleibt gesperrt. Versuche es erneut."
     },
     "tasksCapacityCard": {
       "title": "Aufgaben & Kapazität",

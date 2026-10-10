@@ -17651,7 +17651,13 @@
       "fresh_start_confirm_action": "リセットして再開",
       "fresh_start_hint": "このクルーメイトと新しい会話を始めます。以前のメッセージは表示されたままです。",
       "fresh_start_failed_queued": "まだキューにメッセージがあります。終わるのを待ってから、もう一度リセットしてください。",
-      "fresh_start_failed_busy": "クルーメイトはまだ作業中で止まりませんでした。先に止めてから、もう一度お試しください。"
+      "fresh_start_failed_busy": "クルーメイトはまだ作業中で止まりませんでした。先に止めてから、もう一度お試しください。",
+      "dashboard_lock_page": "ダッシュボードをロック",
+      "dashboard_unlock_page": "ダッシュボードのロックを解除",
+      "dashboard_lock_hint": "ロックすると、このクルーメイトはこのダッシュボードを別のレイアウトに差し替えたり、以前のものに戻したりできなくなります。",
+      "dashboard_locked_status": "ロック中。このクルーメイトは表示中の値を更新できますが、レイアウトの変更や復元はできません。",
+      "dashboard_lock_failed": "ダッシュボードをロックできませんでした。ロックされていません。もう一度お試しください。",
+      "dashboard_unlock_failed": "ダッシュボードのロックを解除できませんでした。ロックされたままです。もう一度お試しください。"
     },
     "tasksCapacityCard": {
       "title": "タスクと処理能力",

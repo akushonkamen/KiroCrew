@@ -82,7 +82,7 @@ import {
   type SessionActions,
 } from './markdown/contexts'
 import { artifactSlugFromHref, soleLinkInParagraph, useSessionChip, useUnfurlHref } from './markdown/linkTargets'
-import { dashboardPreviewRef, dashboardPreviewSlugFromHref } from '../utils/dashboardPreview'
+import { dashboardPreviewMemberFromHref, dashboardPreviewMemberRef, dashboardPreviewRef, dashboardPreviewSlugFromHref } from '../utils/dashboardPreview'
 import { ClosedSessionNotice } from './markdown/ClosedSessionNotice'
 import { activatePath, usePathResolution } from './markdown/pathReferences'
 import { ELEMENT_OVERRIDES, sp } from './markdown/elements'
@@ -1053,10 +1053,18 @@ export default memo(function MarkdownRenderer({ content, streaming = false, onFi
     // the real href, so the browser can still open the URL itself.
     if (onArtifactOpen && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       const anchor = el.closest('a[href]') as HTMLAnchorElement | null
-      const previewSlug = dashboardPreviewSlugFromHref(anchor?.getAttribute('href'))
+      const href = anchor?.getAttribute('href')
+      const previewSlug = dashboardPreviewSlugFromHref(href)
       if (previewSlug) {
         e.preventDefault()
         onArtifactOpen(dashboardPreviewRef(previewSlug))
+        return
+      }
+      // The page link `dashboard_preview` hands out now, which names the crew.
+      const previewMember = dashboardPreviewMemberFromHref(href)
+      if (previewMember) {
+        e.preventDefault()
+        onArtifactOpen(dashboardPreviewMemberRef(previewMember))
       }
     }
   }, [onArtifactOpen])

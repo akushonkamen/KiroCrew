@@ -52,7 +52,7 @@ import { useAppSelector } from '../../store'
 import { selectSlotSubagents, selectSlotToolLog } from '../../store/chatSlice'
 import { mcpAppKey } from '../../store/chatSlice'
 import McpAppFrame from '../../components/McpAppFrame'
-import { dashboardPreviewSlugFromRef } from '../../utils/dashboardPreview'
+import { dashboardPreviewOfRef } from '../../utils/dashboardPreview'
 import type { ExtractedLink } from '../../utils/extractChatLinks'
 import type { PullRequestLink } from '../../utils/pullRequestLinks'
 import type { ChatPin } from '../../api/pins'
@@ -1850,10 +1850,10 @@ function TabBody({ tab, active, slot, projectDir, onClose, onContentChange, onDi
   }
   if (tab.kind === 'artifact') {
     // A crewmate's staged dashboard rides the artifact tab (see `dashboardPreviewRef`).
-    const previewSlug = dashboardPreviewSlugFromRef(tab.artifactSlug)
+    const preview = dashboardPreviewOfRef(tab.artifactSlug)
     // A local boundary: a failed chunk load must not reach the route boundary and
     // unmount the host page (and any unsaved form on it).
-    if (previewSlug) return <ErrorBoundary scope="dashboard-preview" retryOnly><Suspense fallback={null}><DashboardPreviewPanel slug={previewSlug} /></Suspense></ErrorBoundary>
+    if (preview) return <ErrorBoundary scope="dashboard-preview" retryOnly><Suspense fallback={null}><DashboardPreviewPanel {...preview} /></Suspense></ErrorBoundary>
     return (
       <ArtifactPanel
         embedded

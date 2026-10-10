@@ -2147,6 +2147,35 @@ def _skip_continuations(text: str, index: int) -> int:
     return index
 
 
+#: ``$(( <int literal> ))`` arithmetic expansion of one integer literal (decimal,
+#: hex or octal), the only arithmetic a floor can fold without running bash; a
+#: variable-carrying expression is runtime state (documented residual).
+_ARITH_INT_LITERAL_RE = re.compile(r"\$\(\(\s*(-?(?:0[xX][0-9a-fA-F]+|[0-9]+))\s*\)\)")
+
+
+def _arith_int_literal_repl(match: "re.Match[str]") -> str:
+    """The decimal spelling bash prints for one arithmetic integer literal."""
+    lit = match.group(1)
+    magnitude = lit.lstrip("-")
+    try:
+        if magnitude.lower().startswith("0x"):
+            value = int(lit, 16)
+        elif magnitude.startswith("0") and len(magnitude) > 1:
+            # bash reads a leading zero as octal; an invalid octal digit is a
+            # bash error (no command runs), so the spelling is left alone.
+            value = int(lit, 8)
+        else:
+            value = int(lit, 10)
+        # ``str`` stays INSIDE the try: hex/octal ``int`` uses a power-of-two
+        # base exempt from the interpreter's digit cap, so a ~3600-digit hex
+        # literal converts -- but its decimal ``str`` IS capped and would raise
+        # straight through ``is_denied``, aborting the evaluation. Keeping the
+        # original spelling instead composes into a fail-closed deny.
+        return str(value)
+    except ValueError:
+        return match.group(0)
+
+
 def _word_at(text: str, index: int, word: str) -> bool:
     """True if *word* stands alone at *index* rather than sitting inside a longer word.
 
@@ -3387,6 +3416,15 @@ def _nested_shell_payloads(
                     payloads.append(joined)
                     if joined_out is not None:
                         joined_out.add(joined)
+        elif base == "flock":
+            # ``flock <file> -c '<script>'`` runs the script through ``$SHELL -c``,
+            # so its ``-c``/``--command`` value is a command line like a shell's;
+            # the file operand before the flag is skipped by the flag scan.
+            j = _first_stop_at_or_after(flag_stops, i + 1)
+            if j < limit:
+                k = past_dashes[j + 1]
+                if k < limit:
+                    payloads.append(tokens[k])
     # ``bash<<<'<payload>'`` glues the program, the operator and the payload into ONE
     # token, so the program never appears as a token of its own for the walk above to
     # recognise.  Split on the operator and check the left half.

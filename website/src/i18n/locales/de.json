@@ -11703,8 +11703,6 @@
         "close": "Crew-Chat schließen",
         "load_failed": "Diese Sitzung konnte nicht von {{name}} geladen werden.",
         "empty": "Noch keine Nachrichten.",
-        "interrupted": "Runde unterbrochen",
-        "continue": "Fortsetzen",
         "action_failed": "{{name}} hat diese Aktion abgelehnt. Versuche es erneut oder öffne das Dashboard der Crew.",
         "offline": "{{name}} ist nicht verbunden. Verbinde es erneut, um zu senden.",
         "rewinding": "Zurückspulen: Beim Senden wird die Unterhaltung ab dieser Nachricht ersetzt.",
@@ -11719,6 +11717,8 @@
         "approval_hint": "Genehmigen führt nur diesen einen Befehl aus. Ablehnen überspringt ihn; der Agent macht ohne ihn weiter.",
         "retry": "Erneut versuchen",
         "running_on_header": "Auf {{name}}",
+        "unreachable": "{{name}} war nicht erreichbar. Versuch es erneut, sobald es wieder online ist.",
+        "open_crew_dashboard": "Dashboard von {{name}} öffnen",
         "approval_elsewhere": "Der Agent auf {{name}} wartet auf eine Genehmigung, die dieses Fenster nicht beantworten kann. Beantworte sie im Dashboard der Crew."
       },
       "messageContextMenu": {

@@ -3,7 +3,7 @@
  *
  *  Nothing here is stored on the hub. The transcript, the running flag and the
  *  pending approval are the peer's, read through `/api/instances/{id}/proxy/`,
- *  and every action (send, stop, approve, continue, regenerate, rewind) calls
+ *  and every action (send, steer, stop, approve, continue, regenerate, rewind) calls
  *  the peer's own route for its own slot. The hub's proxy redacts every reply
  *  before it reaches this component, so peer text renders as delivered.
  *
@@ -17,9 +17,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Server, X } from 'lucide-react'
-import { api } from '../../../api/client'
+import { api, ApiError } from '../../../api/client'
 import { crewPeerUrl } from '../../../api/client/instances'
 import { useAppSelector } from '../../../store'
+import { useSelectInstance } from '../../../hooks/useSelectInstance'
 import { Btn } from '../../../components/ui'
 import ErrorNotice from '../../../components/ErrorNotice'
 import Glass from '../../../components/Glass'
@@ -30,7 +31,7 @@ import { ReadOnlyCodeCtx } from '../../../components/markdown/contexts'
 import { SlotProvider } from '../../../providers/SlotContext'
 import { i18nT } from '../../../i18n/t'
 import { errMessage } from '../../../utils/thunkError'
-import type { ChatMessage } from '../../../types'
+import type { ChatMessage, ChatSlot } from '../../../types'
 import { closeCrewWindow, coverSiblings, markCrewWindowShown, readCrewDraft, subscribeCrewDraft, writeCrewDraft, type CrewWindowTarget } from './crewWindowStore'
 import { createCrewWindowRenderers, crewWindowSlot } from './crewWindowRenderers'
 import { useCrewWindowModelPicker, type PeerModelFields } from './crewWindowModelPicker'
@@ -39,16 +40,35 @@ import { isHiddenInvisibleAssistantRow } from '../../../utils/invisibleText'
 import { isSystemNoticeRow } from '../CompactionCard'
 import { useMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import type { MessageQuote } from '../../../chat-core/composer/messageQuote'
+import { loadChatConfig } from '../ChatSettings'
 
 interface PeerApproval { origin?: string; request_id?: string; request_mid?: string }
-interface PeerSlot extends PeerModelFields { key?: string; title?: string; running?: boolean; interrupted?: boolean; agent?: string; pending_approval_info?: PeerApproval | null }
-interface PeerDetail { title?: string; running?: boolean; messages?: ChatMessage[] }
+interface PeerSlot extends PeerModelFields {
+  key?: string; title?: string; running?: boolean; interrupted?: boolean; agent?: string; pending_approval_info?: PeerApproval | null
+  // The peer's own turn state, drawn by the composer as it draws a local one.
+  stopping?: boolean; stop_state?: ChatSlot['stop_state']; stop_declined?: boolean; compacting?: boolean; project?: string
+}
+/** The slot detail, with the peer's own context meter reading. */
+interface PeerDetail { title?: string; running?: boolean; messages?: ChatMessage[]; context_pct?: number; context_used_tokens?: number; context_window_tokens?: number }
 
 /** How long a burst of peer frames waits before one transcript re-read. */
 const REFETCH_THROTTLE_MS = 300
 /** How often an unmatched (or unreachable) crew's version is re-read. */
 const CAPS_RETRY_MS = 5000
 const NO_MESSAGES: ChatMessage[] = []
+const NO_INSTANCES: never[] = []
+
+/** The proxy's codes for a request that never reached the crew's chat:
+ *  the tunnel is down, has no credential, the crew did not answer, or it
+ *  refused the tunnel's credential. */
+const UNREACHABLE_CODES = new Set(['proxy_peer_not_connected', 'proxy_no_credential', 'proxy_peer_unreachable', 'proxy_unauthorized', 'instances_manager_unavailable'])
+
+/** Whether an action failed because the crew could not be reached, not
+ *  because the crew said no. */
+function isUnreachable(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false
+  try { return UNREACHABLE_CODES.has(String((JSON.parse(err.body) as { code?: unknown }).code)) } catch { return false }
+}
 
 /** Whether the hub redacted part of this text (its proxy marker). */
 function hasRedaction(text?: string): boolean {
@@ -76,6 +96,7 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
   const detailKeyQ = useMemo(() => ['crew-window', instanceId, key, 'detail'] as const, [instanceId, key])
   const instancesQ = useQuery({ queryKey: ['instances'], queryFn: () => api.listInstances() })
   const name = instancesQ.data?.instances.find(i => i.id === instanceId)?.name || instanceId
+  const { selectInstance } = useSelectInstance(instancesQ.data?.instances ?? NO_INSTANCES)
   // A tunnel that is down answers `version: ""`, which reads as a mismatch;
   // re-ask until the versions match so a reconnect unlocks the window.
   const capsQ = useQuery({
@@ -215,7 +236,9 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
       if (text.trim()) recoverIntoDraft(text)
     },
   })
-  const send = () => {
+  /** Send the draft. While the peer runs, the composer's busy choice picks:
+   *  a plain send the peer queues, or `steer` into the running turn. */
+  const send = (steer = false) => {
     const typed = (rewindTs ? rewindText : draft).trim()
     if ((!typed && (rewindTs || !messageQuote.pendingQuote)) || action.isPending || !connected) return
     // A held rewind waits for an idle peer: mid-turn the peer refuses it.
@@ -223,7 +246,7 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
     const { quote, text: message } = rewindTs ? { quote: null, text: typed } : messageQuote.consume(typed)
     const req = rewindTs
       ? { path: slotPath + '/rewind', body: { ts: rewindTs, content: message } }
-      : { path: 'api/chat?ws=1', body: { message, slot: key, ...(quote ? { meta: { quote } } : {}) } }
+      : { path: 'api/chat?ws=1', body: { message, slot: key, ...(steer ? { steer: true } : {}), ...(quote ? { meta: { quote } } : {}) } }
     // Cleared at dispatch so text typed while the send is in flight is never
     // wiped by its success; a failure restores it only into an empty box.
     if (rewindTs) setRewindText('')
@@ -233,6 +256,12 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
   }
 
   const running = slotQ.data?.running ?? detailQ.data?.running ?? false
+  // Resume, as locally: only on a turn the peer itself calls interrupted,
+  // and not while a refused rewind is held (Send retries that first).
+  const continuable = connected && !running && !rewindTs && !slotQ.data?.stopping && !!slotQ.data?.interrupted
+  const continuing = action.isPending && action.variables?.path === slotPath + '/continue'
+  // This machine's display choice for the meter; the reading is the peer's.
+  const [chatConfig] = useState(loadChatConfig)
   const approval = slotQ.data?.pending_approval_info
   // Only a native approval names its transcript row, and the peer's strict
   // check needs that row's id so a stale card cannot decide a newer request.
@@ -354,12 +383,6 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
           {approval?.request_id && !nativeApproval && (
             <div className="text-muted" data-testid="crew-window-approval-elsewhere">{i18nT('pages.chat.crewWindow.approval_elsewhere', { name })}</div>
           )}
-          {!running && slotQ.data?.interrupted && (
-            <div className="flex items-center gap-2 text-muted" data-testid="crew-window-interrupted">
-              {i18nT('pages.chat.crewWindow.interrupted')}
-              <Btn disabled={!connected || action.isPending} onClick={() => action.mutate({ path: slotPath + '/continue' })}>{i18nT('pages.chat.crewWindow.continue')}</Btn>
-            </div>
-          )}
         </div>
       </div>
       {/* Glass pins its own root to position: relative, so a plain box places
@@ -369,7 +392,17 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
         {/* The composer's own column, so a notice about a pick sits over the box and chip it is about. */}
         <div className="px-4 mx-auto w-full flex flex-col gap-2" style={{ maxWidth: 'var(--mc-input-width, 900px)' }}>
           {/* No hand-off: the composer below may hold an unsent draft. */}
-          {action.error && <ErrorNotice title={i18nT('pages.chat.crewWindow.action_failed', { name })} message={errMessage(action.error)} onDismiss={() => action.reset()} />}
+          {/* An unreachable crew did not say no: its own words, no raw error,
+              and a way to the crew's own dashboard (which reconnects it). */}
+          {action.error && isUnreachable(action.error) && (
+            <ErrorNotice
+              testId="crew-window-unreachable"
+              message={i18nT('pages.chat.crewWindow.unreachable', { name })}
+              onDismiss={() => action.reset()}
+              footer={<Btn onClick={() => selectInstance(instanceId)}>{i18nT('pages.chat.crewWindow.open_crew_dashboard', { name })}</Btn>}
+            />
+          )}
+          {action.error && !isUnreachable(action.error) && <ErrorNotice title={i18nT('pages.chat.crewWindow.action_failed', { name })} message={errMessage(action.error)} onDismiss={() => action.reset()} />}
           {/* No hand-off: the composer below may hold an unsent draft. */}
           {!!picker.error && <ErrorNotice title={i18nT('pages.chat.crewWindow.action_failed', { name })} message={errMessage(picker.error)} onDismiss={picker.clearError} />}
           {/* No hand-off: same draft. The capability read retries in place. */}
@@ -394,9 +427,29 @@ export default function CrewChatWindow({ target, onClose = closeCrewWindow }: { 
           <ChatInput
             value={rewindTs ? rewindText : draft}
             onChange={rewindTs ? setRewindText : setDraft}
-            onSend={send}
+            onSend={() => send()}
             onStop={() => action.mutate({ path: slotPath + '/stop' })}
             isRunning={running}
+            // Mid-turn the composer offers steer or queue, as locally.
+            canSteer={running}
+            onSteer={() => send(true)}
+            isQueued={!!slotQ.data?.stopping}
+            stopState={slotQ.data?.stop_state}
+            stopDeclined={!!slotQ.data?.stop_declined}
+            compacting={!!slotQ.data?.compacting}
+            continuable={continuable}
+            continueIsRecovery
+            continuing={continuing}
+            onContinue={() => { if (continuable && !action.isPending) action.mutate({ path: slotPath + '/continue' }) }}
+            contextPct={detailQ.data?.context_pct}
+            contextUsedTokens={detailQ.data?.context_used_tokens}
+            contextWindowTokens={detailQ.data?.context_window_tokens}
+            showContextPct={chatConfig.showContextPct}
+            showContextTokens={chatConfig.showContextTokens}
+            // The PEER's folder, as a label: no picker, and nothing on this
+            // machine is rooted at it (see `sessionOnPeer`).
+            project={slotQ.data?.project || ''}
+            sessionOnPeer
             autoFocusKey={rewindTs}
             placeholder={placeholder}
             inputAriaLabel={placeholder}

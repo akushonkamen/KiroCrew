@@ -3447,6 +3447,17 @@ verdict. Completed and blocked verdicts still replace the comment as before, and
 fail-closed `Finalize check-run` step is unchanged, so an incomplete run is never
 mistaken for an approval and merge safety is unaffected.
 
+A clean verdict in the output file proves the fork Opus or GPT lane **computed** a
+pass, not that the PR shows it. `guarded_comment_upsert` returns 0 on every arm, so it
+records what reached the slot as the post step's `publication` output: `published`,
+`superseded` (the PR moved to a newer head), `override` (an accepted human override
+left standing), or `not_published`. Each of these two required lanes' finalize step
+passes only on the first three. A lost write, a taken slot, an unreadable head, an
+earlier run's sample for this head, or a missing record (the post step failed or never
+ran) completes the check-run `failure` titled `verdict not published`, and re-running
+the lane publishes it. That matches the same-repo lanes, whose post step exits 1 on the
+same arms. The advisory lanes record the output too and ignore it.
+
 Nothing the fork controls can influence these reviews:
 
 - `workflow_run` **always** runs the workflow definition from the **default branch**,

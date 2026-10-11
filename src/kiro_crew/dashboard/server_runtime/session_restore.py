@@ -56,6 +56,27 @@ async def _restore_dashboard_sessions(state: DashboardState, cfg: KiroCrewConfig
         # re-mint a colliding low index (which scrambles the tab -> session map).
         state.reseed_slot_counter()
 
+        # A session handed to another session records its manager in its own crew log,
+        # and the gateway publishes that manager only once the entry is on disk — so
+        # the log is what survives a restart and a read has to bring it back.
+        #
+        # NOT AWAITED HERE. That read is proportional to the surviving history of every
+        # restored slot — a unit is only PROVED to record no handoff by reading all of
+        # it — so awaiting it would put history-sized work with no total bound in front
+        # of READY, for a feature most installs never use. The boot path takes none of
+        # it: the gate below is armed synchronously and the pass runs as its own task.
+        #
+        # Until that pass settles, session-control refuses the verbs whose
+        # authorization reads the manager, rather than answering them from a view it has
+        # not finished building — the same rule this module applies to an unreadable
+        # log. The gate is self-clearing: the pass clears it however it ends.
+        from kiro_crew.dashboard import session_control as _session_control
+
+        _session_control.arm_manager_restore()
+        _restore_managers = asyncio.create_task(_session_control.rebuild_managers_from_log(state))
+        state._background_tasks.add(_restore_managers)
+        _restore_managers.add_done_callback(state._background_tasks.discard)
+
     if state._dynamic_cards is not None:
         state._dynamic_cards.seed_open_sessions()
 

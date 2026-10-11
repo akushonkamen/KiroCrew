@@ -332,6 +332,11 @@ ROWS_ONLY_OWNED_META_KEYS: frozenset[str] = frozenset({"_type", "created_at", "l
 # absent ``origin`` restores to the empty sentinel the rehydrate paths already treat
 # that way.
 #
+# ``manager`` is ``created_by``'s companion and defers with it: it names the session
+# that HOLDS this one now, which is the other half of the same authorization answer,
+# and it fails closed the same way -- absent, the holder is the creator, which is the
+# reach a gateway has with no handoff recorded at all.
+#
 # What is left out is left out deliberately: ``auto_tagged``, ``human_seen``,
 # ``channel_origin`` and ``channel_folder_filed`` are MONOTONE once-flags about the
 # CONVERSATION, set and never cleared, so a shared transcript's two writers cannot

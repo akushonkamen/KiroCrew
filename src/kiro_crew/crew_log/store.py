@@ -2410,6 +2410,59 @@ def read_last_tree_edge(segment: Path) -> "Entry | None":
     return _last_entry_of_types(tail, _TREE_EDGE_TYPES)
 
 
+#: The entry type that moves a session's MANAGER, read from a unit's tail like the
+#: tree edges beside it. Deliberately NOT in :data:`_LIFECYCLE_TYPES`, for the reason
+#: the tree edges are not: that set decides open versus closed and so authorizes
+#: retention's delete, and a handoff sitting at the end of a log must not keep that log
+#: forever.
+_MANAGER_TYPES = frozenset({"session/manager_set"})
+
+
+def read_last_manager_set(segment: Path) -> "Entry | None":
+    """The newest manager entry in *segment*'s tail window, or ``None``.
+
+    The manager counterpart of :func:`read_last_tree_edge`, with the same bound and the
+    same meaning: a handoff lands after the session opened, so a reader of a unit's
+    HEAD cannot see it. Bounded, so it is the cheap first look rather than the whole
+    answer; :func:`find_last_manager_set` is what a rebuild needs.
+
+    Raises whatever the read raises, like :func:`read_head`: "this unit records no
+    handoff" and "its bytes were not seen" are different answers, and a rebuild must
+    fall back to the creator on the second rather than treat it as the first.
+    """
+    tail = _scan_tail(segment)
+    if tail.empty:
+        return None
+    return _last_entry_of_types(tail, _MANAGER_TYPES)
+
+
+def find_last_manager_set(directory: Path) -> "Entry | None":
+    """The newest manager entry in the WHOLE of *directory*'s surviving log.
+
+    What a rebuild needs, for the reason :func:`find_last_tree_edge` is needed: a
+    handoff written before the log grew past the tail window is invisible to the
+    bounded read, and losing it does not produce a missing manager but a WRONG one --
+    the gateway falls back to the creator and refuses the session that actually holds
+    the target. Segments are searched newest first and the first answer wins.
+    """
+    found = [
+        (first, child)
+        for child in directory.iterdir()
+        if (first := _segment_first_seq(child)) is not None
+    ]
+    if not found:
+        return None
+    found.sort(key=lambda pair: pair[0], reverse=True)
+    for _first, segment in found:
+        entry = read_last_manager_set(segment)
+        if entry is not None:
+            return entry
+        entry = _scan_whole_for_types(segment, _MANAGER_TYPES)
+        if entry is not None:
+            return entry
+    return None
+
+
 def tree_edge_scan_identity(directory: Path) -> "tuple[int, int, int, int] | None":
     """What must be unchanged for an earlier COMPLETE tree-edge read of this unit to
     still be its answer, or ``None`` when the unit has no segments.

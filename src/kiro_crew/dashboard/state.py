@@ -2931,6 +2931,7 @@ class _ChatSlot:
         "_last_stop_reason",
         "_created_by",
         "_created_by_sid",
+        "_manager",
         "_lineage_minted",
         "_revived_by",
         "_artifact",
@@ -3481,6 +3482,17 @@ class _ChatSlot:
         #: is fenced from them precisely so nothing there can be forged as
         #: gateway-authored.
         self._created_by_sid: str = ""
+        #: The slot key of the session that holds this one NOW, or "" for a slot
+        #: nobody has handed over. One value: a session has one direct manager at a
+        #: time. Empty means the manager is ``_created_by``, which is why a gateway
+        #: with no handoff behaves exactly as it did before the field existed -- the
+        #: reach a creator has is unchanged until something writes here. Written only
+        #: by the session-control handoff verb, read for send / read / stop / close /
+        #: adopt / release reach; ``_created_by`` records who CREATED the session and
+        #: is never overwritten, so memory delegation and the per-creator slot cap
+        #: keep their own answer. Persisted and restored at startup for the same
+        #: reason ``_created_by`` is: authorization must survive a restart.
+        self._manager: str = ""
         #: True only on a slot THIS gateway process minted through the
         #: session-control create verb. Never persisted or restored: it is the
         #: witness that ``_created_by`` / ``_created_by_sid`` were stamped by the

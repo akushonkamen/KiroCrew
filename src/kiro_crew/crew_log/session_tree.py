@@ -90,6 +90,7 @@ from typing import Any, Final
 from kiro_crew.crew_log.errors import CrewLogError
 from kiro_crew.crew_log.schema import KIND_SESSION, Entry
 from kiro_crew.crew_log.store import (
+    find_last_manager_set,
     find_last_tree_edge,
     find_spawned_entries,
     newest_segment,
@@ -1067,6 +1068,79 @@ def slot_chain_head(slot: str) -> SlotHead:
             return UNDECIDED
         records.append(record)
     return fold_slot_head(records, slot)
+
+
+def slot_manager(slot: str) -> "tuple[str, bool]":
+    """*slot*'s manager as the LOG states it, as ``(manager, decided)``.
+
+    The durable answer to "who drives this session", read from the units on disk so a
+    restart reads exactly what the process before it would have. It is what makes a
+    handoff survive a restart: the gateway publishes a new manager only once its
+    ``session/manager_set`` entry is on disk, and this is the read that brings it back.
+
+    TWO answers, because a caller must tell "no handoff" from "the log did not say".
+    ``("", True)`` is decided and empty: this slot's units hold no manager entry, or
+    their newest one reverts the slot to its creator. Either way the manager is whoever
+    CREATED the session and the caller may state that -- including by clearing a
+    manager some cache still names, which is the whole use of the decided half.
+    ``("", False)`` is undecided -- a unit that would not open, a store that cannot be
+    listed, a unit id this reader cannot account for -- and a caller must then fall
+    back to the creator WITHOUT recording that as the log's answer, because the next
+    read may see the entry this one missed.
+
+    Both empties lead a caller to the same conservative place (the creator), which is
+    the fail-closed direction: the reach a gateway had before any handoff. They are
+    still kept apart, because only the decided one may be written down as a fact.
+
+    The search is newest unit first and the first answer wins: a slot that has run
+    under several ids carries its newest statement in its newest unit, and an older
+    unit's handoff is superseded rather than merged. Within a unit the read is the
+    complete one (:func:`~kiro_crew.crew_log.store.find_last_manager_set`), because a
+    rebuild has no checkpoint to recover a decision the tail window could not reach.
+
+    Blocking: it lists the store and reads a window per unit of this slot. A coroutine
+    hops a thread for it.
+    """
+    if not slot or not _bounded(slot, MAX_SHORT_STRING):
+        return ("", False)
+    try:
+        units = session_units_for_slot(slot, strict=True)
+    except LookupError:
+        # No store AT THE NAME: no unit of this slot can exist, so "no handoff" is the
+        # whole truth rather than a short read. Same reading as ``slot_chain_head``.
+        return ("", True)
+    except OSError:
+        return ("", False)
+    for unit in reversed(units):
+        if not _bounded(unit, MAX_ACP_SESSION_ID_LEN):
+            # A unit of this slot this reader cannot account for. Not skippable: the
+            # entry it may hold is exactly the one being looked for.
+            return ("", False)
+        directory = unit_dir_for(KIND_SESSION, unit)
+        if directory is None:
+            return ("", False)
+        try:
+            entry = find_last_manager_set(directory)
+        except OSError:
+            return ("", False)
+        if entry is None:
+            continue
+        data = entry.data if isinstance(entry.data, Mapping) else {}
+        manager = str(data.get("manager") or "")
+        if str(data.get("slot") or "") not in ("", slot):
+            # The entry names a different slot than the unit header does. Unprovable,
+            # so it decides nothing.
+            return ("", False)
+        if data.get("to_creator") is True and not manager:
+            # A handoff TAKEN BACK. Decided and empty, the same answer a slot with no
+            # entry at all gets -- and decided is the half that matters, because it is
+            # what lets a rebuild clear a manager the metadata cache still names.
+            return ("", True)
+        if not manager or not _bounded(manager, MAX_SHORT_STRING):
+            # An entry that states no usable manager is not an answer about this slot.
+            return ("", False)
+        return (manager, True)
+    return ("", True)
 
 
 def opened_record(

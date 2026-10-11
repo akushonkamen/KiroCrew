@@ -159,16 +159,76 @@ locale edit: labels are written once per CAPABILITY and reused by every harness.
 never heard of" holds the panel half — a projection nothing renders is not a
 feature, so both halves are asserted.
 
-Each set reaches one of four buckets, and a new set must be put in one of them or
+Each set reaches one of five buckets, and a new set must be put in one of them or
 `test_backend_cards` fails — the same forcing function the disposition table applies
 to a set's consumers:
 
 | Bucket | What it means | Where |
 |---|---|---|
-| user-facing | Switching harness changes what the user can DO, and the absence is a LOSS: a control disappears, a command is refused, tools are missing from a session. | `USER_FACING_LINES`, rendered available / not available / not measured |
+| user-facing | Switching harness changes what the user can DO, and the absence is a LOSS: a control disappears, a command is refused, tools are missing from a session. | `USER_FACING_LINES`, the CURATED core of seven, rendered available / not available / not measured and the only lines "supports N of M" counts |
+| detail | A real capability whose absence is a loss, but not one a user picks a harness by: how a saved spec loads, an agent-side orchestration verb, an agent-file format. | `DETAIL_LINES`, sent as `details`, folded behind a disclosure under the core list and outside its count |
 | security | It moves a confinement or credential boundary: which layer confines the agent, whether Crew hands its own credential to the child, how an unclassifiable approval is answered. | `SECURITY_LINES`, stated only when it HOLDS, rendered OUTSIDE every disclosure |
 | operator | It says where something LIVES: whose disk holds the transcript, which side supplies the model list, which channel carries a command. | `OPERATOR_LINES`, stated only when it HOLDS |
 | off-card | The only difference is which code path runs, OR the card cannot honestly project the membership. Two tests: if the membership were wrong, would the user see a missing feature or a BUG? A defect is not a capability. And can this card establish the fact at all? A version-gated membership cannot be marked available by a projection that holds no version. | `OFF_CARD_SETS`, with the reason per set |
+
+### The complete capability list
+
+The card is curated, so it is the wrong place to compare two harnesses across their WHOLE range. `backend_cards.complete_capabilities()` is the single source for that: every tracked capability -- core, detail, security, operator, and every `OFF_CARD_SETS` set as a raw membership -- scored against every known harness. It is built from the same buckets the card reads, so the two cannot disagree. The table below is `complete_capabilities_markdown()`, and `test_backend_cards` fails when it drifts; regenerate it by pasting that function's output between the markers.
+
+Read it by tier. `core` rows are the card, and the last row is each harness's core count in the card's own arithmetic: available over measured core lines, with an unmeasured remainder named beside it as the panel's "plus N not checked" does. `detail` rows are capabilities behind the panel's disclosure. `security` and `operator` rows are notes stated only where they hold. `internal` rows say which code path runs, not what a user gains: both states are correct behaviour, and each one's reason is its `OFF_CARD_SETS` entry. ✓ has it, · does not, ? not measured yet. "Decided by" names the set (or union of sets) a harness joins to gain the cell, which is the seam to change when a harness should gain it.
+
+**What makes a line core.** A capability is core when a user weighs it while picking a harness: it decides whether Crew works in the harness at all (its tools, a crewmate's chat), what a chat can do (Side Chat tools, steering a running turn, /compact), or what can be tuned (effort, model). A real capability that is a mechanism rather than a choice -- how a saved spec loads, a verb the agent calls, an agent-file format -- is a detail line. The core set is kept small enough to hold in one's head, and no harness, the default included, is expected to lead it: the count reports memberships, and `test_core_counts_per_harness_are_pinned` pins every harness's count so that any move is a deliberate edit.
+
+<!-- complete-capabilities:begin -->
+| Capability | Tier | Decided by | claude | codex | deepseek | goose | kas | kiro | opencode | pi |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `crew_tools` | core | `SESSION_MCP_ARRAY` ∪ `KIRO_SLASH_COMMANDS` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `member_thread_tools` | core | `MEMBER_DISPATCH` | ✓ | ✓ | · | ✓ | ✓ | · | ✓ | · |
+| `side_chat_tools` | core | `SIDE_READONLY` | · | · | · | · | ✓ | ✓ | · | · |
+| `mid_turn_steer` | core | `STEER` ∪ `STEERING_REQUEST` | · | ✓ | · | · | ✓ | ✓ | · | · |
+| `manual_compact` | core | `COMPACT` | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ? |
+| `reasoning_effort` | core | `EFFORT_VIA_CONFIG_OPTION` ∪ `KIRO_SLASH_COMMANDS` | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | ✓ |
+| `model_switch` | core | `MODEL_VIA_CONFIG_OPTION` ∪ `KIRO_SLASH_COMMANDS` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `member_saved_agent` | detail | `MEMBER_CAPABILITIES` | · | · | · | · | · | ✓ | · | · |
+| `subagent_continuation` | detail | `SESSION_SHARING` | · | ✓ | · | · | · | ✓ | · | · |
+| `markdown_agents` | detail | `MARKDOWN_AGENT_SPECS` | · | · | · | · | ✓ | · | · | · |
+| `crew_sandbox_stands_down` | security | `INTERNAL_SANDBOX` | · | · | · | · | · | ✓ | · | · |
+| `refuses_unclassified_tools` | security | `META_IDENTITY` | · | · | · | ✓ | · | · | · | · |
+| `host_credential_to_child` | security | `HOST_AUTH_CALLBACK` | · | · | · | · | ✓ | · | · | · |
+| `pod_home_relocated` | security | `POD_HOME_REMAP` | · | · | · | · | · | ✓ | · | · |
+| `own_credential_store` | operator | auth declaration | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ |
+| `ACP_BACKENDS_ACP_CLIENT_SPAWNABLE` | internal | - | ✓ | · | ✓ | ✓ | · | ✓ | ✓ | ✓ |
+| `ACP_BACKENDS_ACP_RUNTIME` | internal | - | · | ✓ | · | · | ✓ | ✓ | · | · |
+| `ACP_BACKENDS_ADVERTISED_MODEL_SELECTION` | internal | - | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ |
+| `ACP_BACKENDS_CLIENT_META_SETTINGS` | internal | - | · | · | · | · | ✓ | · | · | · |
+| `ACP_BACKENDS_CONTEXT_RECYCLE` | internal | - | · | · | ✓ | · | · | · | · | · |
+| `ACP_BACKENDS_CREW_FIRES_SPEC_HOOKS` | internal | - | · | · | · | ✓ | ✓ | · | ✓ | · |
+| `ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION` | internal | - | · | · | ✓ | · | · | · | · | ✓ |
+| `ACP_BACKENDS_HARNESS_MANAGED_COMPACTION` | internal | - | · | · | · | · | ✓ | · | · | · |
+| `ACP_BACKENDS_HARNESS_OWNED_SESSIONS` | internal | - | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ |
+| `ACP_BACKENDS_HONOR_ZERO_TOOL_BAN` | internal | - | · | · | · | ✓ | ✓ | ✓ | ✓ | · |
+| `ACP_BACKENDS_HOOKS_LIST` | internal | - | · | · | · | · | ✓ | · | · | · |
+| `ACP_BACKENDS_INDEPENDENT_SETUP` | internal | - | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ |
+| `ACP_BACKENDS_INLINE_COMPACTION` | internal | - | ✓ | ✓ | · | ✓ | · | · | ✓ | · |
+| `ACP_BACKENDS_LOAD_WITHOUT_MODES` | internal | - | · | · | ✓ | · | · | · | ✓ | · |
+| `ACP_BACKENDS_MCP_CONFIG_HOT_RELOAD` | internal | - | · | · | · | · | · | ✓ | · | · |
+| `ACP_BACKENDS_MEMBER_PANEL` | internal | - | ✓ | ✓ | · | ✓ | ✓ | · | ✓ | · |
+| `ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS` | internal | - | · | ✓ | · | · | · | · | · | · |
+| `ACP_BACKENDS_NATIVE_TODOS` | internal | - | ✓ | · | · | · | · | · | · | · |
+| `ACP_BACKENDS_OPEN_EXTERNAL_URL` | internal | - | · | · | · | · | ✓ | · | · | · |
+| `ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL` | internal | - | · | · | · | · | ✓ | · | · | · |
+| `ACP_BACKENDS_RESUME_WITHOUT_LOAD` | internal | - | · | · | ✓ | · | · | · | · | · |
+| `ACP_BACKENDS_SEED_LOCAL_SETTINGS` | internal | - | ✓ | · | · | · | · | · | · | · |
+| `ACP_BACKENDS_SELF_SERVED_ACP` | internal | - | · | · | ✓ | ✓ | · | · | ✓ | · |
+| `ACP_BACKENDS_SERIAL_SESSION_STARTS` | internal | - | · | · | · | · | · | ✓ | · | · |
+| `ACP_BACKENDS_SESSION_EVICTION` | internal | - | · | ✓ | · | · | ✓ | ✓ | · | · |
+| `ACP_BACKENDS_SPEC_SERVERS_OFF_WIRE` | internal | - | · | · | · | · | ✓ | ✓ | · | · |
+| `ACP_BACKENDS_STRUCTURED_REFUSAL` | internal | - | · | · | · | · | ✓ | ✓ | · | · |
+| `ACP_BACKENDS_TOOL_SEARCH_OVERLAY` | internal | - | · | · | · | · | · | ✓ | · | · |
+| `ACP_BACKENDS_UNATTRIBUTED_TERMINAL_ERROR` | internal | - | · | ✓ | · | · | · | · | · | · |
+| `ACP_BACKENDS_USER_LEVEL_AGENT_SPECS_ONLY` | internal | - | · | · | · | · | ✓ | · | · | · |
+| **core count** | core | | 5/7 | 6/7 | 3/7 | 4/7 | 7/7 | 6/7 | 4/7 | 2/6 (+1 ?) |
+<!-- complete-capabilities:end -->
 
 Two rules decide the bucket, and both are about what a mark on a card MEANS.
 

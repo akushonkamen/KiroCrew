@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -2848,6 +2849,26 @@ def _fold_line_breaks(text: str) -> str:
     )
 
 
+#: Hands each slot OBJECT a number saying which occupant of its key it is, so a
+#: reusable slot name can be told apart from the identity that held it. A slot key is
+#: not an identity -- a tab can be opened under a key a departed session used -- and
+#: the only way two slot objects exist under ONE key is for the first to have left the
+#: live table or be on its way out, because ``get_or_create_slot`` hands back the
+#: sitting occupant rather than building a second one. So construction order IS
+#: occupancy order per key, and a higher number means a later occupant.
+#:
+#: ``itertools.count`` rather than a module-level integer: ``next`` on it is one
+#: atomic step, and slots are constructed from the gateway's worker threads as well as
+#: the loop.
+#:
+#: Process-local and never persisted. It is only ever compared with another number
+#: from the SAME process (see ``note_manager_departed``, whose record is in memory
+#: too), so a restart beginning the count again compares nothing against anything.
+#: Starts at 1 so that zero is free to mean "this object cannot say which occupant it
+#: is", which is below every real generation and so proves nothing obsolete.
+_SLOT_OCCUPANCY_GENERATIONS = itertools.count(1)
+
+
 class _ChatSlot:
     """Independent chat session that runs server-side."""
 
@@ -2932,6 +2953,7 @@ class _ChatSlot:
         "_created_by",
         "_created_by_sid",
         "_manager",
+        "_occupancy_generation",
         "_lineage_minted",
         "_revived_by",
         "_artifact",
@@ -3493,6 +3515,22 @@ class _ChatSlot:
         #: keep their own answer. Persisted and restored at startup for the same
         #: reason ``_created_by`` is: authorization must survive a restart.
         self._manager: str = ""
+        #: Which occupant of this slot's KEY this object is, from
+        #: ``_SLOT_OCCUPANCY_GENERATIONS``. The manager-line departure record is keyed
+        #: on it beside the key and matched EXACTLY, so an entry belonging to a close
+        #: that is finishing late for an occupant the key no longer has is not
+        #: something the walk can read for the one holding it now. In memory only and
+        #: never persisted: it compares two objects alive in one process and means
+        #: nothing outside it.
+        self._occupancy_generation: int = next(_SLOT_OCCUPANCY_GENERATIONS)
+        # Taking the key is announced HERE, where it happens, because every path that
+        # puts a session at a key comes through this constructor -- a tab open, a
+        # resume, a transfer import, a restore at startup -- while the paths that END
+        # an occupancy are several and each one would have to remember. Deferred import
+        # for the cycle between this module and session control.
+        from kiro_crew.dashboard.session_control import note_key_taken
+
+        note_key_taken(self.key, self._occupancy_generation)
         #: True only on a slot THIS gateway process minted through the
         #: session-control create verb. Never persisted or restored: it is the
         #: witness that ``_created_by`` / ``_created_by_sid`` were stamped by the

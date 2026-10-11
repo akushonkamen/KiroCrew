@@ -993,16 +993,156 @@ Two rules give a member caller its shape:
   ceiling is read at the switch gate (`member_dispatch_enabled()`) and, like
   the switch, **fails closed** — an unreadable config withdraws the bypass
   rather than granting it.
-- **A member caller may only act on sessions it created.** Slot creation records
-  `created_by` (the creator's caller key) in the slot's birth metadata; it is
-  persisted with the session and rehydrated on restart (both restore paths).
-  `authorize_target` refuses a member caller whose key does not match the
-  target's `created_by` (`not_creator`, 403) — and this ownership boundary binds
-  **even when the global switch is enabled**, so a member never widens to the
-  ordinary caller's reach. It binds identically for case (b): the chat-slot
-  member is fenced to the workers it created, never the user's own sessions.
-  Every other refusal in the table above still applies to member callers
-  unchanged.
+- **A member caller may only act on its own reporting line.** How far that line
+  reaches is `agent.session_manager_chain` (bool, default **false**). OFF — the
+  shipped default — the line is ONE level: the caller's `manager_of` and nobody
+  above it, which is the reach session control grants without this knob, so a
+  gateway that never sets it authorizes exactly what it authorized before the
+  knob existed. Everything below about climbing the line, and the hand-up on a
+  departure, is what turning it ON adds. Read like the switch itself and
+  **fails closed** — an unreadable config keeps the line off rather than widening
+  it — and resolved ONCE per operation by the caller, then carried, because the
+  fence runs inside the close's no-suspension window where a config load must not
+  happen.
+
+  Slot creation records `created_by` (the creator's caller key) in the slot's birth metadata;
+  it is persisted with the session and rehydrated on restart (both restore
+  paths). For the verbs a handoff widens — send, read, stop, close, adopt,
+  release and a further handoff — `authorize_target` reads the target's MANAGER
+  LINE: its `manager_of` (`_manager` when a handoff wrote one, else
+  `created_by`) and then each manager above that, climbing live one hop per
+  slot under a shared depth bound. A caller on that line is admitted; every
+  other caller is refused (`not_creator`, 403). For every other verb —
+  `create`, `fork`, `rename`, `set_model`, `retry` — it still reads
+  `created_by` alone, so minting a session against the caller's memory binding
+  stays with whoever created it.
+
+  The line is not only a handoff's doing. With nothing handed over it IS the
+  creation chain, so a member that created the session that created the target
+  reaches the target: the member already drives the middle session, so it could
+  already have the target driven by telling that one to, and reading the line
+  removes the relay rather than a boundary. One level deep, the line and
+  `created_by` are the same answer.
+
+  Every edge of the walk fails CLOSED — an empty hop, a cycle, a hop whose slot
+  is gone, a line past the bound — so a line that cannot be stated denies reach.
+
+  This ownership boundary binds **even when the global switch is enabled**, so a
+  member never widens to the ordinary caller's reach. It binds identically for
+  case (b): the chat-slot member is fenced to its own line, never the user's own
+  sessions. Every other refusal in the table above still applies to member
+  callers unchanged.
+- **A departed manager is read THROUGH when the line is walked**, when
+  `agent.session_manager_chain` is on. With it off the walk never runs and a
+  departure changes no answer, which is what a gateway without the knob does.
+
+  When a session leaves the live slot table for good — a tab close, an
+  idle-archive sweep, or a history delete — that path records ONE value about the
+  departing session: the manager it reported to, read while its slot is still in
+  hand. No other session's `_manager` is rewritten, nothing is saved, and no loop
+  visits other slots. The walk resolves the departed hop from that record and
+  carries on up, so a finished conductor does not strand the sessions it was
+  running. `created_by` is never rewritten either.
+
+  A session that reported to nobody records NOBODY, since there is no hop above it
+  to resolve to, and the walk reads an entry naming nobody as the END of a line.
+
+  **An entry answers for ONE occupant of a key and for no other.** A slot key is
+  reusable, so "what did this key report to" has as many answers as the key has had
+  occupants, and a lookup taking the key alone can hand back a previous occupant's
+  answer — to a walk that would then give that occupant's manager reach over the
+  sessions the current one opened. So an entry is keyed on the pair (slot key,
+  occupancy generation), where the generation is `_ChatSlot._occupancy_generation`,
+  handed out at construction and held in memory only.
+
+  **A read resolves the generation from the key's CURRENT occupancy and matches the
+  pair exactly.** The occupancy is recorded where a key is TAKEN — in the slot
+  constructor, which every path that puts a session at a key goes through: a tab
+  open, a resume, a transfer import, a restore at startup. An entry filed under any
+  other generation is therefore not something the walk can reach for: not as a
+  fallback, not when the exact entry is missing, not under any ordering of writes.
+  That property does not depend on every writer having been fenced correctly, which
+  is why it is the one the design rests on.
+
+  **A line not yet knowable is UNREAD, and a line that ended is READ.** These are
+  different facts even though neither leaves a manager to follow, and an entry carries
+  which one it is. An entry written at the pop is PENDING: the occupant is inside its
+  close and what it reports to is not published yet. An entry written on the committed
+  side is settled, and one naming nobody means the line really has ended.
+
+  A pending entry — and an absent one, which leaves the same ignorance, whether the
+  entry was never written or the bound dropped it — answers "unread", so BOTH
+  polarities refuse: a reader is denied reach, and a writer refuses to add an edge
+  below that hop. A settled entry naming nobody answers "read to the end", so a reader
+  is denied and a writer may proceed.
+
+  The writer's half is the load-bearing one and it is why the two cannot be collapsed.
+  Read as a line that ended, a pending vacancy tells the handoff loop guard that
+  nothing sits above the closing manager, so the guard permits an edge that becomes a
+  CYCLE when the close commits and the real manager lands: hand T to R while M (R's
+  manager, reporting to T) is closing, and the committed departure completes
+  T → R → M → T, cutting off every manager above M and persisting the cycle to the
+  manager log. With an unfenced caller the guard is the only check in the way, so its
+  answer is the whole of the defence.
+
+  The guard REFUSES on any line it could not read, and it names which kind of refusal
+  it is. A hop inside its own close clears by itself — that close publishes what it
+  reported to when it commits or rolls back — so the caller is told 409
+  `manager_line_pending` and to retry. A proven loop, a cycle further up the line, a
+  line past the depth bound and an evicted record are not answered differently by
+  waiting, so they keep `would_cycle`. The refusal is the same in both cases; only the
+  advice differs, and neither is a guess about a line nobody could read.
+
+  Eviction therefore costs reach and never a boundary, and making the cache bigger is
+  not a fix for anything — it would only narrow a window.
+
+  **The write refuses too, independently.** A departure whose own generation is not
+  the key's occupancy at write time records nothing at all. This is belt and braces
+  rather than the mechanism: the read would not reach such an entry either way, and
+  refusing the write is what keeps the table free of entries nothing can read.
+
+  Why both, stated plainly: an earlier version of this design fenced only the write,
+  comparing generations between the arriving close and whatever entry stood under the
+  key. Eviction dropped the entry that carried the comparison, and the fence then had
+  nothing to compare against, so a close finishing late for an occupant the key had
+  moved on from wrote its stale manager back and the walk handed that manager the
+  replacement's sessions. Exact matching on the read removes the question rather than
+  answering it: there is no entry under the key to be compared with, only an entry
+  under an occupant.
+
+  **The edge is marked at the POP as well as written at the commit.** While the key is
+  out of the live table the walk stops reading the manager off a live slot, and the
+  departing slot's own manager is not published until its close commits. So each path
+  with awaits between the pop and the commit (the single-tab close and the
+  idle-archive sweep; the history delete has none) writes a PENDING entry under the
+  current occupancy at the pop, and the window refuses on that entry rather than on
+  the absence of one. What the window costs is reach, for the length of one close, to
+  the session that is closing anyway. Nothing about the closing session's own manager
+  is published there, so a close that fails and puts the tab back has still handed
+  nothing up.
+
+  The record is in memory and BOUNDED by count, oldest-first, with ONE bound: the
+  entries live inside the occupancy table, so at most one generation per key is
+  resolvable and a key that is retaken or evicted takes its entry with it. A hop it
+  cannot resolve STOPS the walk — the hop is not skipped and nothing above it is
+  admitted — so an unresolvable line denies reach, which is the reach the fence
+  grants without this knob at all. It is held in memory rather than read back from
+  the departed session's persisted metadata because that read is disk I/O and the
+  walk is called from the fence, which runs inside the close's no-suspension window.
+
+  Bounded by count rather than by liveness on purpose: dropping an entry that no
+  live session's `manager_of` names deletes the hop a CHAINED departure still needs,
+  since in a line whose middle and upper hops have both gone, nothing live names the
+  upper one.
+
+  **Reach across a departed manager does not survive a restart.** The record is in
+  memory, so a restarted gateway rehydrates the slots and not the record, and a walk
+  meeting that hop refuses. What that costs is reach; no caller is admitted after a
+  restart that would not have been admitted without this knob at all.
+
+  Written ONLY at departure, and only from the COMMITTED manager — `_manager` then
+  `created_by`, never a staged handoff value — so the record cannot name a manager
+  the persisted line disagrees with.
 
 Ordinary (non-member) callers are untouched: they still require the switch.
 The exceptions are `session_end_wait`, whose own creator fence (below, "Ending

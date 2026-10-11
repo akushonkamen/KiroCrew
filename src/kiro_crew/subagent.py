@@ -1472,11 +1472,18 @@ def effort_drop_reason(
 
     Mirrors the model resolution the provider factory's effort gate actually
     sees (explicit per-spawn model, else the subagent role pin, else the selected
-    member's pin, template pin and global fallback). A resolved ``auto`` cannot
-    carry an effort level through the overlay. Returns a human-readable reason when
-    *reasoning_effort* is set
-    but the resolved model is not effort-capable; ``""`` means the effort will
-    be delivered, none was requested, or the selection could not be resolved.
+    member's pin, template pin and global fallback). Returns a human-readable
+    reason when *reasoning_effort* is set but the resolved model is not
+    effort-capable; ``""`` means the effort will be delivered, none was
+    requested, or the selection could not be resolved.
+
+    With no model pinned this reports no drop on any backend. The factory then
+    carries the level unkeyed and the provider binds it at start to the model
+    the backend reports serving (``AcpProvider._bind_unbound_effort``), and that
+    model is not known here: kiro-cli serves its ``chat.defaultModel`` when one
+    is set, and ``auto`` only when none is. The provider judges the level once
+    the model is named and logs it when it is not applied, so the verdict asks
+    the same question the provider does instead of guessing the answer.
     Reporting-only: never raises and never influences whether or how a spawn
     proceeds. ``crew_agent`` has the same namespace semantics as allocation.
     """
@@ -1485,14 +1492,8 @@ def effort_drop_reason(
     if _effort_channel(backend) is None:
         return f"backend '{backend}' takes no reasoning-effort level, so it is not applied"
     resolved = _spawn_effective_model(model, agent, crew_agent=crew_agent, backend=backend)
-    if resolved is None:
-        return ""
     if not resolved:
-        return (
-            "no concrete model is pinned — the model resolves to 'auto', which "
-            "does not support effort configuration; pass an effort-capable "
-            "model= to apply the level"
-        )
+        return ""
     if not model_supports_effort(resolved):
         return f"model '{resolved}' does not support effort configuration"
     return ""
@@ -1513,6 +1514,9 @@ def effort_applied_note(
     Claude) when a requested per-spawn effort WILL take effect. The key matters
     because kiro-cli silently ignores a level written under the wrong family
     key, so a bare "applied" would leave that failure mode unobservable.
+    With no model pinned no model can be named yet, so the note says the level
+    is bound at start to whatever the backend serves, on the same condition the
+    provider applies (see :func:`effort_drop_reason`).
     Complementary with the drop reason when the selection can be resolved:
     exactly one is non-empty for a requested effort. An unavailable selection
     leaves both empty, and so does a per-spawn *backend* that advertises its own
@@ -1521,9 +1525,18 @@ def effort_applied_note(
     if not reasoning_effort or _effort_judged_at_session_start(backend):
         return ""
     resolved = _spawn_effective_model(model, agent, crew_agent=crew_agent, backend=backend)
-    if not resolved or not model_supports_effort(resolved):
+    if resolved is None:
         return ""
     channel = _effort_channel(backend)
+    if channel is None:
+        return ""
+    if not resolved:
+        return (
+            "no model pinned: bound at start to the model the backend serves, "
+            "if that model takes effort; otherwise not applied and logged"
+        )
+    if not model_supports_effort(resolved):
+        return ""
     if channel == "config_option":
         from kiro_crew.acp_backends import effort_config_option_id
 

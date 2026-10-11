@@ -466,7 +466,9 @@ When the re-plan leaves no item to dispatch, the goal is done or every item is
 terminal: that is a stop condition, not a pause.
 
 **Rounds are not gated, but spend is bounded.** Two checks replace the old
-per-round pause. Count both from `work_ledger_read`, not from memory:
+per-round pause. Count both from `work_ledger_read`, not from memory. Read the
+item count from its `conductor.goal_items_used`, not by counting `items`: the
+board lists open items and only the newest closed ones.
 
 - **Item cap.** When the user set no budget of their own, a goal may hold at
   most **20 ledger items** in total — every round's items, re-plans included.

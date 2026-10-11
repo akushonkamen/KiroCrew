@@ -321,6 +321,28 @@ def test_a_worker_claim_is_not_reported_as_an_acceptance() -> None:
     assert derived["items_done"] == "1 of 3 items accepted"
 
 
+def test_forgotten_closed_items_still_count_toward_the_board_totals() -> None:
+    """A closed item the fold let go is still the board's: its counts ride in
+    ``forgotten`` and join the totals, so a long board does not read as short."""
+    derived = build_crew_main(
+        _reads(
+            work={
+                "items": [{"state": "open", "status": "progress"}, {"state": "accepted"}],
+                "omitted": 0,
+                "forgotten": {
+                    "created": 300,
+                    "items": 298,
+                    "accepted": 290,
+                    "rejected": 5,
+                    "abandoned": 3,
+                },
+            }
+        )
+    )
+    assert derived["items_done"] == "291 of 300 items accepted"
+    assert derived["items_open"] == "1 of 300 items not yet done"
+
+
 def test_dropped_log_entries_are_never_added_into_a_board_total() -> None:
     derived = build_crew_main(_reads(work={"items": [], "omitted": 4}))
     assert "4" in derived["board_omitted"]

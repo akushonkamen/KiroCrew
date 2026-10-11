@@ -503,7 +503,7 @@ def test_a_full_fold_that_omitted_nothing_is_the_whole_board_and_rebuilds(monkey
 
 
 def test_a_rebuild_sets_the_create_counter_to_what_the_record_holds(monkeypatch):
-    """The stored bound's counter is rebuilt from the fold, not carried over.
+    """The create counter is rebuilt from the fold, not carried over.
 
     A cache header can hold a count the record does not: higher, after a create
     whose entry never landed and whose record was then removed, or after the
@@ -511,8 +511,7 @@ def test_a_rebuild_sets_the_create_counter_to_what_the_record_holds(monkeypatch)
     ``created_total`` is the number of items the fold retained -- past the ceiling
     guard the fold dropped no create, and its ``omitted`` there counts entries that
     are not this board's creates -- so with the fold's one item a counter of 7
-    comes down to 1, and one of 0 comes up to 1, and a board so rebuilt admits
-    exactly the creates the fold has room for.
+    comes down to 1, and one of 0 comes up to 1.
     """
     fold = _rendered(CONDUCTOR, "it_0000abcd")
     fold["omitted"] = 3  # stragglers of a purged board: not creates, not counted
@@ -534,13 +533,7 @@ def test_a_rebuild_sets_the_create_counter_to_what_the_record_holds(monkeypatch)
         assert (counts["items"], counts["legacy"]) == (1, 0)
         header = wl.read_conductor(CONDUCTOR)
         assert header is not None and header.created_total == 1
-    # The rebuilt counter is live: with the bound at the fold's one item, the next
-    # create is refused, and with room for one more it lands and bumps the counter.
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 1)
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 2)
+    # The rebuilt counter is live: the next create lands and bumps it.
     wl.apply_conductor_action(CONDUCTOR, "create", title="second", acceptance={})
     assert wl.read_conductor(CONDUCTOR).created_total == 2
 
@@ -1446,6 +1439,46 @@ async def test_items_from_before_the_projection_survive_a_rebuild(monkeypatch):
     # The counter covers every record the rebuilt board holds: a legacy item's
     # first recorded mutation materialises it in the fold, where it takes a slot.
     assert header.created_total == counts["items"] + counts["legacy"] == 3
+
+
+@pytest.mark.asyncio
+async def test_a_present_but_unreadable_record_is_not_deleted_by_a_rebuild(monkeypatch):
+    """A transient read error on a cache record the fold does not name must not delete
+    it. The rebuild reads such records strictly, so an I/O blip (a Windows rename race,
+    a permission hiccup) RAISES and unwinds the rebuild's undo instead of reading the
+    file as absent and unlinking it -- which would turn a momentary read error into
+    real data loss. The record stays on disk for the next rebuild."""
+    _real_units(monkeypatch)
+    wl.ensure_conductor(CONDUCTOR, goal="goal")
+
+    # A real recorded create, so the fold has entries and the rebuild runs its
+    # post-write pass over the stray below (an empty fold short-circuits the rebuild).
+    status, body = await _record(
+        CONDUCTOR, {"action": "create", "title": "recorded one", "acceptance": ACCEPTANCE}
+    )
+    assert status == 200, body
+
+    # A stray record on disk the fold does not name, so the post-write pass reads it.
+    stray_id = "it_0000beef"
+    stray = wl.item_path(CONDUCTOR, stray_id)
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text(json.dumps({"item_id": stray_id, "title": "stray"}), encoding="utf-8")
+
+    real_read = wl.read_work_item
+
+    def _blip_on_strict(slot: str, item_id: str, *, strict: bool = False):
+        if item_id == stray_id and strict:
+            raise OSError("permission blip, present but unreadable")
+        return real_read(slot, item_id, strict=strict)
+
+    monkeypatch.setattr(wl, "read_work_item", _blip_on_strict)
+
+    with pytest.raises(OSError):
+        wl.rebuild_from_projection(CONDUCTOR)
+
+    # The undo restored it: the record is still on disk, byte for byte.
+    assert stray.exists()
+    assert json.loads(stray.read_text(encoding="utf-8"))["item_id"] == stray_id
 
 
 @pytest.mark.asyncio
@@ -2959,10 +2992,10 @@ def test_a_rebuild_holds_a_fold_created_items_lock_through_its_undo(monkeypatch)
 
     real_read = wl.read_work_item
 
-    def _fail_once_the_new_item_has_landed(slot: str, item_id: str):
+    def _fail_once_the_new_item_has_landed(slot: str, item_id: str, *, strict: bool = False):
         if item_id == stray_id and wl.item_path(CONDUCTOR, new_id).exists():
             raise OSError("disk full, after the new item landed")
-        return real_read(slot, item_id)
+        return real_read(slot, item_id, strict=strict)
 
     took_the_lock = threading.Event()
     observed: dict[str, bool] = {}
@@ -3429,3 +3462,248 @@ def test_a_new_board_generation_starts_its_age_over() -> None:
     assert state["last_entry_at"] == projection._work_iso(
         fresh
     ), "a new generation's age is its own, not the purged board's"
+
+
+# ── the fold forgets closed items (rfc-work-fold-forget-closed) ─────────────
+
+
+def _create_close_board(count: int, *, open_at_end: int = 0) -> tuple[dict[str, Any], list[str]]:
+    """Fold a conductor log that creates and closes *count* items, interleaved,
+    then creates *open_at_end* more it leaves open. Returns the state and the ids."""
+    state = projection._work_start()
+    projection._work_bind_slot(state, "member-board")
+    seq = 0
+    ids: list[str] = []
+    peak = 0
+    for index in range(count + open_at_end):
+        item_id = f"it_{index:08x}"
+        ids.append(item_id)
+        seq += 1
+        projection._work_step(
+            state,
+            _work_entry(
+                seq=seq,
+                time_ms=1790000000000 + seq,
+                actor="conductor",
+                action="create",
+                item_id=item_id,
+                title=f"t{index}",
+                event_kind="create",
+                event=f"t{index}",
+            ),
+        )
+        peak = max(peak, len(state["items"]))
+        if index < count:
+            seq += 1
+            projection._work_step(
+                state,
+                _work_entry(
+                    seq=seq,
+                    time_ms=1790000000000 + seq,
+                    actor="conductor",
+                    action="close",
+                    item_id=item_id,
+                    state="accepted",
+                    event_kind="close",
+                    event="accepted",
+                ),
+            )
+    state["_peak"] = peak
+    return state, ids
+
+
+def test_a_long_board_folds_to_its_open_items_plus_the_closed_window() -> None:
+    """Interleaved creates and closes past the old 256 bound fold without omission.
+
+    The fold never holds more than the closed window plus what is open, whatever the
+    board's lifetime total, and the forgotten counts keep the board's whole tally.
+    """
+    window = projection.WORK_CLOSED_WINDOW
+    state, ids = _create_close_board(300, open_at_end=2)
+    peak = state.pop("_peak")
+    view = projection._work_render(state)
+
+    assert view["omitted"] == 0
+    assert peak <= window + 2
+    held = [item["item_id"] for item in view["items"]]
+    assert held == ids[300 - window :]  # the newest closed window, then the open two
+    assert view["forgotten"] == {
+        "created": 302,
+        "items": 300 - window,
+        "accepted": 300 - window,
+        "rejected": 0,
+        "abandoned": 0,
+    }
+    assert set(state["tombstones"]) == set(ids[: 300 - window])
+
+
+def test_a_late_report_for_a_forgotten_item_is_dropped_not_parked() -> None:
+    """A worker report written before a close but folded after it, once the item has
+    left the window, is dropped: nothing parks, ``omitted`` stays 0."""
+    window = projection.WORK_CLOSED_WINDOW
+    state, ids = _create_close_board(window + 1)
+    forgotten_id = ids[0]
+    assert forgotten_id in state["tombstones"]
+
+    projection._work_step(
+        state,
+        _work_entry(
+            seq=10_000,
+            time_ms=1790000000001,
+            actor="worker",
+            action="report",
+            item_id=forgotten_id,
+            status="done",
+            summary="late",
+            event_kind="report",
+            event="late",
+        ),
+    )
+    view = projection._work_render(state)
+
+    assert state["parked"] == {}
+    assert view["omitted"] == 0
+    assert forgotten_id not in {item["item_id"] for item in view["items"]}
+
+
+def test_a_late_report_for_an_item_still_in_the_window_still_applies() -> None:
+    """Inside the window a closed item is whole, so a late report lands on it."""
+    state, ids = _create_close_board(3)
+    projection._work_step(
+        state,
+        _work_entry(
+            seq=10_000,
+            time_ms=1790000000001,
+            actor="worker",
+            action="report",
+            item_id=ids[0],
+            status="done",
+            summary="late but kept",
+            event_kind="report",
+            event="late",
+        ),
+    )
+    assert state["items"][ids[0]]["summary"] == "late but kept"
+
+
+def test_the_tombstone_set_is_capped(monkeypatch) -> None:
+    """Past the cap the oldest id goes first, so the set stays bounded."""
+    monkeypatch.setattr(projection, "WORK_TOMBSTONE_LIMIT", 5)
+    monkeypatch.setattr(projection, "WORK_CLOSED_WINDOW", 1)
+    state, ids = _create_close_board(10)
+    assert list(state["tombstones"]) == ids[4:9]
+    assert state["forgotten"]["items"] == 9
+
+
+def test_a_create_reusing_a_forgotten_id_is_a_new_item() -> None:
+    """The log holds each entry once, so a create naming a forgotten id is not a
+    replay: it folds as a new item, and the id stops being a tombstone. (The store
+    keeps every record, so it never re-mints one; this covers a log written
+    elsewhere.)"""
+    window = projection.WORK_CLOSED_WINDOW
+    state, ids = _create_close_board(window + 1)
+    reused = ids[0]
+    assert reused in state["tombstones"]
+    projection._work_step(
+        state,
+        _work_entry(
+            seq=10_000,
+            time_ms=1790000009999,
+            actor="conductor",
+            action="create",
+            item_id=reused,
+            title="again",
+            event_kind="create",
+            event="again",
+        ),
+    )
+    assert reused not in state["tombstones"]
+    assert state["items"][reused]["title"] == "again"
+    assert state["items"][reused]["state"] == "open"
+    assert state["omitted"] == 0
+
+
+def _closed_cached(title: str, closed_at: str) -> str:
+    """A cached item, recorded and closed, with a pinned ``closed_at``."""
+    item = wl.apply_conductor_action(CONDUCTOR, "create", title=title, acceptance={})["item"]
+    wl.mark_item_recorded(CONDUCTOR, item.item_id)
+    wl.apply_conductor_action(CONDUCTOR, "close", item_id=item.item_id, state="accepted")
+    path = wl.item_path(CONDUCTOR, item.item_id)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["closed_at"] = closed_at
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return item.item_id
+
+
+def _fold_with_one_closed(monkeypatch) -> dict[str, Any]:
+    """A fold holding one closed item and reporting four closed items forgotten."""
+    fold = _rendered(CONDUCTOR, "it_0000abcd")
+    fold["items"][0]["state"] = "accepted"
+    fold["items"][0]["closed_at"] = "2026-09-20T10:10:00"
+    fold["forgotten"] = {"created": 5, "items": 4, "accepted": 4, "rejected": 0, "abandoned": 0}
+    monkeypatch.setattr(
+        projection,
+        "read_slot_projection",
+        lambda slot, name, **_kw: SimpleNamespace(value=fold if name == "work" else {}),
+    )
+    return fold
+
+
+def test_a_rebuild_keeps_a_closed_record_the_fold_forgot(monkeypatch) -> None:
+    """A cached closed item the fold does not hold is kept as the cache holds it --
+    the cache is where a forgotten item stays whole -- and the create counter takes
+    the fold's total, counting it once."""
+    fold = _fold_with_one_closed(monkeypatch)
+    fold["conductor"]["first_entry_at"] = "2000-01-01T00:00:00"
+    wl.ensure_conductor(CONDUCTOR, goal="ship it")
+    old = _closed_cached("old", "2026-09-20T10:05:00")
+    before = wl.item_path(CONDUCTOR, old).read_bytes()
+
+    counts = wl.rebuild_from_projection(CONDUCTOR)
+
+    assert counts["removed"] == 0
+    assert wl.item_path(CONDUCTOR, old).read_bytes() == before
+    listed = {item.item_id for item in wl.list_work_items(CONDUCTOR)}
+    assert listed == {"it_0000abcd", old}
+    header = wl.read_conductor(CONDUCTOR)
+    assert header is not None and header.created_total == 5
+
+
+def test_a_closed_legacy_record_is_legacy_not_forgotten_in_a_rebuild(monkeypatch) -> None:
+    """A CLOSED record from before the board's first recorded entry is terminal, so
+    the forgotten test would also claim it. It is judged legacy FIRST: the log never
+    held its create, so it is ADDED to the total rather than folded into the fold's own
+    count. Otherwise a board whose forgotten cache records were lost from outside
+    would undercount by one -- ``max(held, forgotten.created)`` already covers the
+    fold's creates, and the legacy record would vanish into ``held``."""
+    fold = _fold_with_one_closed(monkeypatch)
+    # The epoch is in the future (aware, like the store's stamps), so the record
+    # closed below predates it.
+    fold["conductor"]["first_entry_at"] = "2099-01-01T00:00:00+00:00"
+    wl.ensure_conductor(CONDUCTOR, goal="ship it")
+    legacy_closed = _closed_cached("legacy", "2026-09-20T10:05:00")
+    # No forgotten cache record is on disk: all four the fold forgot are "lost".
+
+    counts = wl.rebuild_from_projection(CONDUCTOR)
+
+    assert counts["removed"] == 0
+    assert counts["legacy"] == 1
+    assert wl.item_path(CONDUCTOR, legacy_closed).exists()
+    header = wl.read_conductor(CONDUCTOR)
+    # The fold's five creates plus the one legacy record the log never held.
+    assert header is not None and header.created_total == 6
+
+
+def test_a_rebuild_still_refuses_an_open_item_the_fold_does_not_hold(monkeypatch) -> None:
+    """Forgetting covers CLOSED items only: an open cached item the fold lacks still
+    means a pruned unit, and the rebuild refuses rather than erase it."""
+    fold = _fold_with_one_closed(monkeypatch)
+    fold["conductor"]["first_entry_at"] = "2000-01-01T00:00:00"
+    wl.ensure_conductor(CONDUCTOR, goal="ship it")
+    live = wl.apply_conductor_action(CONDUCTOR, "create", title="live", acceptance={})["item"]
+    wl.mark_item_recorded(CONDUCTOR, live.item_id)
+
+    with pytest.raises(wl.WorkLedgerError) as caught:
+        wl.rebuild_from_projection(CONDUCTOR)
+    assert caught.value.code == wl.CODE_CREW_LOG_INCOMPLETE
+    assert wl.item_path(CONDUCTOR, live.item_id).exists()

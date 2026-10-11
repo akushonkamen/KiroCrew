@@ -147,8 +147,11 @@ from kiro_crew.session_ledger import SCHEMA_VERSION as LEDGER_SCHEMA_VERSION
 from kiro_crew.session_ledger import TERMINAL_PHASES as LEDGER_TERMINAL_PHASES
 from kiro_crew.work_vocab import (
     WORK_BLOCKED_REASONS,
+    WORK_CLOSED_WINDOW,
     WORK_CONDUCTOR_FIELDS,
     WORK_STORED_ITEM_LIMIT,
+    WORK_TOMBSTONE_LIMIT,
+    WorkBoardForgotten,
     WorkBoardItem,
     WorkBoardView,
 )
@@ -6006,23 +6009,21 @@ def work_slots_naming_board(slot: str) -> "tuple[str, ...]":
     return tuple(found)
 
 
-#: Item records the fold retains per board -- the fold's own memory bound, so a
-#: log that carries more still folds to a value of bounded size. Two bounds meet
-#: here. The WRITER caps a board's OPEN items at
-#: ``work_ledger.MAX_ITEMS_PER_CONDUCTOR`` (32, live fan-out) and the CREATES it
-#: admits over the board's life, open and closed together, at
-#: ``work_ledger.MAX_STORED_ITEMS_PER_CONDUCTOR`` -- which is THIS number, both read
-#: off ``work_vocab.WORK_STORED_ITEM_LIMIT``. The writer counts those creates in a
-#: monotonic counter in the board's header, the way this fold counts them in an
-#: append-only log, so a record removed from the writer's cache reopens nothing:
-#: every create the writer admits is one recorded create, a board the writer admits
-#: cannot overflow the fold, the fold holds the whole board and ``omitted`` stays 0.
-#: The fold still holds at most ``WORK_ITEM_LIMIT`` items and counts every create
-#: past that in ``omitted``, and ``work_ledger.rebuild_from_projection`` still
-#: refuses a full fold that reports omissions -- only such a fold is necessarily a
-#: prefix of the board rather than the board -- but with the two bounds equal that
-#: guard is defensive, not the working path.
+#: Item records the fold may hold per board at once -- the fold's own memory bound.
+#: The fold FORGETS a closed item once :data:`WORK_CLOSED_WINDOW` newer closed items
+#: sit behind it (:func:`_work_settle`), so during a replay it holds the items open at
+#: that point in the conductor's log (the writer caps those at
+#: ``work_ledger.MAX_ITEMS_PER_CONDUCTOR``, 32) plus that window, never the board's
+#: lifetime total. Creates and closes interleave in the conductor's own units, which
+#: fold first and in order, so the peak is bounded by open fan-out, not by history.
+#: This ceiling therefore guards only a log the writer did not produce: a create past
+#: it is counted in ``omitted``, and ``work_ledger.rebuild_from_projection`` refuses a
+#: full fold that reports omissions, because only such a fold may be a prefix of the
+#: board.
 WORK_ITEM_LIMIT: Final[int] = WORK_STORED_ITEM_LIMIT
+
+#: The states an item closes in; the writer's ``TERMINAL_ITEM_STATES``.
+_WORK_CLOSED_STATES: Final[tuple[str, ...]] = ("accepted", "rejected", "abandoned")
 
 #: Newest event lines kept per item, the same tail the stored ledger kept.
 WORK_EVENT_LIMIT: Final[int] = 200
@@ -6098,6 +6099,19 @@ def _work_start() -> dict[str, Any]:
         # and ``_state_matches_fold`` discards it, so no resumed state reads it absent.
         "last_entry_ms": 0,
         "generation": "",
+        # Closed items still held, oldest close first; the oldest past
+        # ``WORK_CLOSED_WINDOW`` is forgotten (``_work_settle``).
+        "closed": [],
+        # Ids of forgotten items, oldest first, as a dict for O(1) membership; capped
+        # at ``WORK_TOMBSTONE_LIMIT``. An entry naming one is dropped, never parked.
+        "tombstones": {},
+        "forgotten": {
+            "created": 0,
+            "items": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "abandoned": 0,
+        },
     }
 
 
@@ -6230,6 +6244,11 @@ def _work_step(state: dict[str, Any], entry: Entry) -> None:
         if item_id in state["items"]:
             state["omitted"] += 1
             return
+        # The store mints an id only while no record holds it and keeps every record,
+        # so it never re-mints a forgotten id; the log holds each entry once, so this is
+        # not a replay either. Should a log from elsewhere carry one, it starts a fresh
+        # item and the id stops being a tombstone.
+        state["tombstones"].pop(item_id, None)
         if len(state["items"]) >= WORK_ITEM_LIMIT:
             state["omitted"] += 1
             return
@@ -6244,8 +6263,17 @@ def _work_step(state: dict[str, Any], entry: Entry) -> None:
         # conductor's; they were kept aside and are applied now, in time order.
         for parked in sorted(state["parked"].pop(item_id, ()), key=lambda p: p[0]):
             _work_apply(item, parked[1], parked[0])
+        state["forgotten"]["created"] += 1
+        _work_settle(state, item)
         return
     item = state["items"].get(item_id)
+    if item is None and item_id in state["tombstones"]:
+        # A closed item this fold already let go. The writer refuses every write to a
+        # closed item, so this entry was written BEFORE the close and is only folded
+        # after it, from a unit read later (a worker's). Parking it would wait for a
+        # create that already went by, so it is dropped: it could only change fields of
+        # an item the fold does not render, and its history stays in the crew log.
+        return
     if item is None and data.get("baseline") is True:
         # The entry carries the whole committed item (one the record never held
         # whole before): materialise it here, then apply the action as usual.
@@ -6271,6 +6299,7 @@ def _work_step(state: dict[str, Any], entry: Entry) -> None:
         state["order"].append(item_id)
         for parked_entry in sorted(state["parked"].pop(item_id, ()), key=lambda p: p[0]):
             _work_apply(item, parked_entry[1], parked_entry[0])
+        state["forgotten"]["created"] += 1
     if item is None:
         parked = state["parked"].get(item_id)
         if parked is None:
@@ -6286,6 +6315,48 @@ def _work_step(state: dict[str, Any], entry: Entry) -> None:
         parked.append([entry.time, dict(data)])
         return
     _work_apply(item, data, entry.time)
+    _work_settle(state, item)
+
+
+def _work_settle(state: dict[str, Any], item: dict[str, Any]) -> None:
+    """Track *item*'s closed status and forget the oldest closed item past the window.
+
+    A closed item does not need to live in the fold: its whole history stays in the
+    crew log. Keeping every one would make the fold grow with the board's LIFETIME
+    creates. So the fold keeps the newest
+    :data:`WORK_CLOSED_WINDOW` closed items whole, for the surfaces that draw recent
+    history, and lets older ones go: their id joins ``tombstones`` (so a late entry
+    for one is dropped, not parked) and their closing state is counted in
+    ``forgotten``. The writer never reopens an item; should a fold see one leave a
+    closed state anyway, it simply leaves the window again.
+    """
+    item_id = item["item_id"]
+    closed: list[str] = state["closed"]
+    if item["state"] not in _WORK_CLOSED_STATES:
+        if item_id in closed:
+            closed.remove(item_id)
+        return
+    if item_id in closed:
+        return
+    closed.append(item_id)
+    while len(closed) > WORK_CLOSED_WINDOW:
+        _work_forget(state, closed.pop(0))
+
+
+def _work_forget(state: dict[str, Any], item_id: str) -> None:
+    """Drop *item_id* from the fold and remember only its id and closing state."""
+    item = state["items"].pop(item_id, None)
+    if item is None:
+        return
+    if item_id in state["order"]:
+        state["order"].remove(item_id)
+    forgotten = state["forgotten"]
+    forgotten["items"] += 1
+    forgotten[item["state"]] += 1
+    tombstones: dict[str, None] = state["tombstones"]
+    tombstones[item_id] = None
+    while len(tombstones) > WORK_TOMBSTONE_LIMIT:
+        del tombstones[next(iter(tombstones))]
 
 
 def _work_apply_header(state: dict[str, Any], data: Mapping[str, Any]) -> None:
@@ -6493,6 +6564,7 @@ def _work_render(state: dict[str, Any]) -> WorkBoardView:
         },
         "items": items,
         "omitted": state["omitted"] + sum(len(p) for p in state["parked"].values()),
+        "forgotten": cast("WorkBoardForgotten", dict(state["forgotten"])),
     }
 
 
@@ -8355,7 +8427,13 @@ def _work_rows(state: Mapping[str, Any]) -> int:
         for item in items.values():
             if isinstance(item, Mapping):
                 rows += _rows_in(item.get("events"))
-    return rows + _rows_in(state.get("parked")) + _rows_in(state.get("order"))
+    return (
+        rows
+        + _rows_in(state.get("parked"))
+        + _rows_in(state.get("order"))
+        + _rows_in(state.get("closed"))
+        + _rows_in(state.get("tombstones"))
+    )
 
 
 def _work_opaque(state: Mapping[str, Any]) -> int:
@@ -8566,6 +8644,10 @@ _FOLDS: Final[dict[str, _Fold]] = {
         affects=frozenset({WORK_ENTRY_TYPE}),
         count_rows=_work_rows,
         count_opaque=_work_opaque,
+        # One past the base: the state now carries ``closed``, ``tombstones`` and
+        # ``forgotten``, and a closed item past the window leaves ``items``. A
+        # savepoint of the shape that holds every item would resume holding them.
+        state_version=_FOLD_STATE_VERSION_BASE + 1,
     ),
     PANEL_FOLD_NAME: _Fold(
         PANEL_FOLD_NAME,

@@ -446,13 +446,19 @@ def _work_fields(work: WorkBoardView | FoldUnreadable) -> _WorkFields:
     omitted = _dropped_entries(board.get("omitted"))
     if not isinstance(items, list):
         return same(NOT_RECORDED, omitted)
-    total = len(items)
+    # Closed items the fold forgot (past its closed window) are still this board's:
+    # their counts ride beside the list, so the totals cover the board's whole life.
+    forgotten = board.get("forgotten")
+    forgotten_total = _forgotten_count(forgotten, "items")
+    total = len(items) + forgotten_total
     if not total:
         # A real answer, not an absence: this crew folded a board and it has no items.
         # Saying "not recorded" here would hide a fact the fold does carry.
         return same("no work items on this board", omitted)
     open_items = [item for item in items if item.get("state") == "open"]
-    accepted = sum(1 for item in items if item.get("state") == "accepted")
+    accepted = sum(1 for item in items if item.get("state") == "accepted") + _forgotten_count(
+        forgotten, "accepted"
+    )
     open_total = len(open_items)
 
     def of_open(count: int, tail: str, empty: str) -> str:
@@ -478,6 +484,16 @@ def _work_fields(work: WorkBoardView | FoldUnreadable) -> _WorkFields:
         ),
         "board_omitted": omitted,
     }
+
+
+def _forgotten_count(block: object, key: str) -> int:
+    """A non-negative integer count from a fold block, 0 when it is absent or bad."""
+    if not isinstance(block, dict):
+        return 0
+    value = block.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def _dropped_entries(value: object) -> str:

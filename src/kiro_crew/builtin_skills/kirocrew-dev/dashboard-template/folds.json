@@ -699,6 +699,11 @@
           "optional": false
         },
         {
+          "name": "forgotten",
+          "type": "object",
+          "optional": false
+        },
+        {
           "name": "items",
           "type": "array",
           "optional": false

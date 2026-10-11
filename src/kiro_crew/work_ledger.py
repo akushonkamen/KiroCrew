@@ -66,7 +66,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple
 
 from kiro_crew.atomic_write import atomic_write, read_bytes_with_retry
 from kiro_crew.config.paths import data_home
@@ -170,42 +170,25 @@ CONDUCTOR_ACTIONS: frozenset[str] = frozenset(
 
 #: How many OPEN items one conductor may hold at once -- the bound on live fan-out,
 #: which is the only thing a per-conductor item cap is for. Items in a
-#: :data:`TERMINAL_ITEM_STATES` state do not count: they stay on disk, are still
-#: listed and readable, but a queue conductor that mints one item per ticket and
-#: closes each as it lands would otherwise exhaust the cap on its own history within
-#: a day, with nothing live behind the refusal. Enforced by :func:`_create_item`.
-#: Closed items are bounded with the open ones by
-#: :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` below.
+#: :data:`TERMINAL_ITEM_STATES` state do not count: a queue conductor that mints one
+#: item per ticket and closes each as it lands would otherwise exhaust the cap on its
+#: own history within a day, with nothing live behind the refusal. Enforced by
+#: :func:`_create_item`. There is no bound on how many items a board creates over its
+#: life: the crew log's ``work`` fold forgets a closed item once
+#: ``work_vocab.WORK_CLOSED_WINDOW`` newer closed items sit behind it, so the fold is
+#: bounded by what is open, not by history. This cache keeps every record; nothing
+#: here removes one.
 MAX_ITEMS_PER_CONDUCTOR = 32
-#: How many items one conductor's board may CREATE over its life, open and closed
-#: together -- the bound on stored history, where the cap above bounds live fan-out.
-#: Equal to the crew log fold's per-board item ceiling
-#: (``crew_log.projection.WORK_ITEM_LIMIT``) by construction: both read
-#: :data:`kiro_crew.work_vocab.WORK_STORED_ITEM_LIMIT`. Every create this bound
-#: admits is one recorded create, so a board that cannot admit more creates than the
-#: fold retains cannot overflow the fold, and the fold is always the whole board.
-#: Counted by :attr:`ConductorRecord.created_total`, a monotonic counter in the
-#: header that :func:`_create_item` bumps under the conductor lock, NOT off the
-#: record files and not off the readable listing: the fold counts creates in an
-#: append-only log, so a record removed from ``items/`` -- torn, hand-deleted, lost
-#: -- still has its create there, and a count of what the directory holds would
-#: admit one create more than the fold retains for every record it lost. Removing
-#: a record reclaims nothing. Enforced by :func:`_create_item`, which refuses rather
-#: than evicts -- nothing in this module deletes a record. A board at this bound has
-#: run its course: once every item is closed, ``kirocrew ledger-sweep --purge``
-#: removes the finished ledger whole.
-MAX_STORED_ITEMS_PER_CONDUCTOR = WORK_STORED_ITEM_LIMIT
 #: How many items one GOAL may create, every round and re-plan together, when the
-#: user set no budget of their own. A spend bound, where the two above bound the
-#: store: reaching it means the conductor asks the user, then raises the cap with
+#: user set no budget of their own. A spend bound, where the one above bounds live
+#: fan-out: reaching it means the conductor asks the user, then raises the cap with
 #: ``work_ledger_record action=goal item_cap=N``. Stored per board as
 #: :attr:`ConductorRecord.item_cap` and enforced by :func:`_create_item` on a board
 #: that has recorded a goal -- a queue board that never writes one (the pipeline
-#: and security conductors) keeps only the open and stored bounds.
+#: and security conductors) keeps only the open bound.
 DEFAULT_GOAL_ITEM_CAP = 20
-#: The highest ``item_cap`` a goal write accepts: a cap past the stored bound could
-#: never be reached, so it would only hide that bound behind a different refusal.
-MAX_GOAL_ITEM_CAP = MAX_STORED_ITEMS_PER_CONDUCTOR
+#: The highest ``item_cap`` a goal write accepts.
+MAX_GOAL_ITEM_CAP = WORK_STORED_ITEM_LIMIT
 MAX_EVENTS_PER_ITEM = 200
 MAX_DEPTH = 2
 
@@ -242,7 +225,6 @@ CODE_UNKNOWN_ITEM = "unknown_item"
 CODE_ALREADY_BOUND = "already_bound"
 CODE_ITEM_CLOSED = "item_closed"
 CODE_ITEM_CAP_EXCEEDED = "item_cap_exceeded"
-CODE_ITEM_STORE_FULL = "item_store_full"
 CODE_GOAL_ITEM_CAP_REACHED = "goal_item_cap_reached"
 CODE_CREW_LOG_INCOMPLETE = "crew_log_incomplete"
 CODE_CACHE_DIRTY = "cache_dirty"
@@ -304,8 +286,8 @@ class ConductorRecord:
     #: expected to hold every goal write, and a rebuild checks that it does.
     recorded_at: str = ""
     #: How many items this board has created over its life, open and closed
-    #: together -- what :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` is measured against.
-    #: Monotonic under the store's own writes: :func:`_create_item` bumps it under
+    #: together; the current goal's spend (:attr:`goal_items_used`) is measured off
+    #: it. Monotonic under the store's own writes: :func:`_create_item` bumps it under
     #: the conductor lock in the same hold that writes the item, and nothing here
     #: lowers it -- a record removed from ``items/`` keeps the create it counted,
     #: as the crew log keeps that create's entry. :func:`rebuild_from_projection`
@@ -1031,8 +1013,8 @@ def _stored_item_ids(slot_key: str) -> list[str]:
     of items that read. :func:`rebuild_from_projection` locks and snapshots every
     record by this list, a torn one included, and :func:`_create_item` seeds a
     header that predates :attr:`ConductorRecord.created_total` from it, once. It
-    is NOT what the stored bound counts: a directory listing goes down when a
-    record is removed, and the fold's count of creates never does. Only a full
+    is NOT the board's create count: a directory listing goes down when a record
+    is removed, and the fold's count of creates never does. Only a full
     ``it_<8 hex>`` stem is a record, as in the listing: a stray ``it_bad.json``
     was never minted here and has no create in the fold. Lock-free, like the
     listing; both callers hold the conductor lock.
@@ -1969,32 +1951,24 @@ def _create_item(
 ) -> dict[str, Any]:
     """Mint one item under the conductor lock.
 
-    Two bounds, each checked under the lock and each off the thing it bounds. The
-    stored TOTAL first: :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` is measured against
-    the header's :attr:`ConductorRecord.created_total`, a counter of every create
-    this board has admitted, which this function bumps in the same hold that writes
-    the item. It is a counter and not a count of the records on the board because
-    the fold that equals this bound counts creates in an append-only log: a record
-    removed from ``items/`` -- torn, hand-deleted, lost -- still has its create
-    there, so a count of what the directory holds would admit one create more than
-    the fold retains for every record it lost, and the fold's ceiling guard in
-    :func:`rebuild_from_projection` would then refuse that board for good. The
-    counter only ever climbs here, so a removed record reclaims nothing; a board
-    this refusal admits can always be folded whole, and that guard is defensive.
-    A header from before the counter holds zero: the first create on such a board
-    seeds it from the records the board holds (:func:`_stored_item_ids`), once,
-    before the compare -- a backfill that can only over-count the log, never under.
-    Then the OPEN count: :data:`MAX_ITEMS_PER_CONDUCTOR` bounds live fan-out, read
-    off :func:`list_work_items`, so an item in a terminal state is listed but not
-    counted there, and a torn record -- whose state cannot be read -- counts toward
-    neither. Closed items stay on the board until the stored bound; nothing here
-    evicts one.
+    Two bounds, each checked under the lock. The goal's spend bound first, on a board
+    that recorded a goal: :attr:`ConductorRecord.goal_items_used` against
+    :attr:`ConductorRecord.item_cap`, both off the header's
+    :attr:`ConductorRecord.created_total`, a counter of every create this board has
+    admitted, which this function bumps in the same hold that writes the item. A
+    header from before the counter holds zero: the first create on such a board seeds
+    it from the records the board holds (:func:`_stored_item_ids`), once. Then the
+    OPEN count: :data:`MAX_ITEMS_PER_CONDUCTOR` bounds live fan-out, read off
+    :func:`list_work_items`, so an item in a terminal state is listed but not counted
+    there, and a torn record -- whose state cannot be read -- counts toward neither.
+    Nothing bounds how many items a board creates over its life: the crew log's
+    ``work`` fold forgets old closed items, so it is bounded by what is open.
 
     The header is written FIRST, then the item. A failure between the two leaves
     the counter one ahead of the board -- a create the fold never sees, so the
     safe side -- and the header is put back when the item write raises. The
     other order would let a failed header write leave an item the counter never
-    saw, which is the side that overflows the fold. Every refusal, the item's own
+    saw, which is the side that under-counts the goal's spend. Every refusal, the item's own
     size included, is decided before the header write, so a refused create leaves
     every file byte-identical.
 
@@ -2024,7 +1998,7 @@ def _create_item(
         # that is GONE means the ledger was purged while this call waited on the
         # lock: minting an item now would write a record into a store with no
         # header -- a ledger destroyed down to the records that made it one. And
-        # the header holds the create count the stored bound is measured against,
+        # the header holds the create count the goal's spend is measured against,
         # which the pre-lock snapshot may hold low, so a header that is present
         # but torn refuses too; see ``_header_under_lock``.
         live = _header_under_lock(slot_key, "no item can be created in it")
@@ -2039,19 +2013,6 @@ def _create_item(
             live.created_total = len(_stored_item_ids(slot_key))
         # A header from before the per-goal count: its goal counts from here.
         _settle_goal_base(live)
-        # The stored total first: a board that has admitted every create it may
-        # ever admit is refused whatever its open count, so closed history cannot
-        # carry the board past the fold's ceiling.
-        if live.created_total >= MAX_STORED_ITEMS_PER_CONDUCTOR:
-            raise WorkLedgerError(
-                f"conductor has created {live.created_total} items over its life, open "
-                f"and closed together; the stored bound is {MAX_STORED_ITEMS_PER_CONDUCTOR}. "
-                "Nothing evicts a record and removing one reclaims nothing: once every "
-                "item is closed, `kirocrew ledger-sweep --purge` removes the finished "
-                "ledger whole",
-                code=CODE_ITEM_STORE_FULL,
-                field="items",
-            )
         # The goal's own spend bound: every item this goal created, closed ones
         # and every round's re-plans included. A person decides past it. Only a
         # board that recorded a goal has one: a queue board never writes ``goal``.
@@ -3029,11 +2990,12 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
     writer can take the lock of an item whose record does not exist yet, so the
     window a writer could use opens only once this rebuild writes the file, by
     which time its lock is held. A slot whose fold holds no entry leaves the files
-    untouched, so a caller can tell "no entries" from "rebuilt empty". The rebuilt
-    header's :attr:`ConductorRecord.created_total` is the number of records the
-    rebuilt board holds -- every item the fold retained plus every legacy record
-    kept -- so the stored bound afterwards agrees with the record rather than with
-    whatever the cache's header held.
+    untouched, so a caller can tell "no entries" from "rebuilt empty". A closed record
+    the fold does not hold (it forgets closed items past
+    ``work_vocab.WORK_CLOSED_WINDOW``) is kept as the cache holds it. The rebuilt header's
+    :attr:`ConductorRecord.created_total` is the number of items the fold ever held,
+    forgotten ones included, plus every legacy record kept, so the goal's spend count
+    afterwards agrees with the record rather than with the cache's header.
 
     Returns the counts: ``{"slot_key", "items", "events", "removed", "legacy"}``.
     """
@@ -3087,22 +3049,16 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
         fold_items = [raw for raw in (folded.get("items") or ()) if isinstance(raw, dict)]
         omitted = folded.get("omitted")
         if len(fold_items) >= WORK_ITEM_LIMIT and (not isinstance(omitted, int) or omitted > 0):
-            # The fold keeps a board's first ``WORK_ITEM_LIMIT`` items and counts
-            # every later create in ``omitted``. The writer bounds a board's creates
-            # at that same number (``MAX_STORED_ITEMS_PER_CONDUCTOR`` reads the same
-            # ``work_vocab`` value) with a monotonic counter in the header that a
-            # removed record does not lower, and every create it admits is one
-            # recorded create, so a board the writer admits cannot overflow the
-            # fold and this guard is defensive: it fires on a full fold whose
-            # ``omitted`` counts something else (a straggler entry, a parked one),
-            # or on a board whose header something other than this module wrote
-            # with a count below its creates. A full fold that reports omissions
-            # might be a PREFIX of the board -- rebuilding from it would write the
-            # oldest items back and, past the dirty-cache shortcut below, which
-            # trusts the fold over the cache, unlink every newer one, open items
-            # included -- so it is refused; the cache stands, and it is complete.
-            # A full fold that omitted nothing is the whole board and rebuilds; a
-            # fold whose count is unreadable is treated as full.
+            # The fold HOLDS at most ``WORK_ITEM_LIMIT`` items at once and counts
+            # every create past that in ``omitted``. It forgets closed items past its
+            # window, so a board the writer admits (at most 32 open) never fills it,
+            # and this guard is defensive: it fires on a log something else wrote. A
+            # full fold that reports omissions might be a PREFIX of the board --
+            # rebuilding from it would write the oldest items back and, past the
+            # dirty-cache shortcut below, which trusts the fold over the cache, unlink
+            # every newer one, open items included -- so it is refused; the cache
+            # stands. A full fold that omitted nothing rebuilds; a fold whose count is
+            # unreadable is treated as full.
             raise WorkLedgerError(
                 f"the crew log's fold holds {len(fold_items)} items for this board, its "
                 f"ceiling of {WORK_ITEM_LIMIT}, and omitted {omitted!r}; a board that "
@@ -3130,10 +3086,11 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
             }
         ):
             held.enter_context(item_lock(slot_key, new_id, create=True))
-        _refuse_fold_behind_cache(slot_key, present, fold_items, header)
+        forgotten = _folded_forgotten(folded)
+        _refuse_fold_behind_cache(slot_key, present, fold_items, header, forgotten)
         touched = _rebuild_footprint(slot_key, present, fold_items)
         try:
-            counts = _rebuild_locked(slot_key, header, fold_items, present)
+            counts = _rebuild_locked(slot_key, header, fold_items, present, forgotten)
         except BaseException:
             try:
                 _restore_files(touched)  # the locks are already held here
@@ -3147,11 +3104,45 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
         return counts
 
 
+class _Forgotten(NamedTuple):
+    """What a ``work`` fold view says about the closed items it let go."""
+
+    #: Every item the fold has held, forgotten ones included.
+    created: int
+    #: How many closed items it let go.
+    items: int
+
+
+def _folded_forgotten(folded: Any) -> _Forgotten:
+    """The fold's ``forgotten`` counts, zero for a view that carries none."""
+    view = folded if isinstance(folded, dict) else {}
+    counts = view.get("forgotten")
+    counts = counts if isinstance(counts, dict) else {}
+    return _Forgotten(
+        created=max(0, _as_int(counts.get("created"), 0)),
+        items=max(0, _as_int(counts.get("items"), 0)),
+    )
+
+
+def _may_be_forgotten(cached: "WorkItem", forgotten: "_Forgotten | None") -> bool:
+    """Whether *cached* may be a closed item the fold let go, so its absence from the
+    fold is no sign of a lost unit.
+
+    The rebuild KEEPS such a record rather than judging it: the cache is the only
+    place a forgotten item stays whole, and nothing in the store removes a record. So
+    a closed record the fold lacks, on a board whose fold reports forgotten items, is
+    neither refused nor removed -- whatever the reason it is absent, keeping it loses
+    nothing. An open record the fold lacks is still a lost unit and still refused.
+    """
+    return forgotten is not None and forgotten.items > 0 and cached.is_terminal
+
+
 def _refuse_fold_behind_cache(
     slot_key: str,
     present: "list[str]",
     fold_items: "list[dict[str, Any]]",
     header: "dict[str, Any] | None" = None,
+    forgotten: "_Forgotten | None" = None,
 ) -> None:
     """Refuse the rebuild when the record holds LESS than the cache does.
 
@@ -3244,6 +3235,11 @@ def _refuse_fold_behind_cache(
         if cached is None:
             continue
         folded = by_id.get(item_id)
+        if folded is None and _may_be_forgotten(cached, forgotten):
+            # A closed item the fold may have let go once newer closed items filled
+            # its window. The rebuild keeps its cached record (``_rebuild_locked``),
+            # so there is nothing to protect by refusing.
+            continue
         if folded is None:
             created = _parse_iso(cached.created_at)
             post_epoch = (
@@ -3413,7 +3409,11 @@ def _rebuild_footprint(
 
 
 def _rebuild_locked(
-    slot_key: str, header: dict[str, Any], fold_items: "list[dict[str, Any]]", present: "list[str]"
+    slot_key: str,
+    header: dict[str, Any],
+    fold_items: "list[dict[str, Any]]",
+    present: "list[str]",
+    forgotten: "_Forgotten | None" = None,
 ) -> dict[str, Any]:
     """The rebuild's writes, run under the locks :func:`rebuild_from_projection` holds."""
     epoch = _parse_iso(_as_str(header.get("first_entry_at")))
@@ -3494,31 +3494,53 @@ def _rebuild_locked(
         written_events += len(events)
 
     removed = 0
+    forgotten_kept: set[str] = set()
     legacy: set[str] = set()
     for item_id in present:
         if item_id in kept:
             continue
-        cached = read_work_item(slot_key, item_id)
+        # STRICT so a present-but-momentarily-unreadable record -- a Windows rename
+        # race, a permission or disk blip -- RAISES rather than reading as absent.
+        # The non-strict read read such a file as ``None`` and the loop then unlinked
+        # it, turning a transient read error into real data loss. The raise unwinds
+        # into ``rebuild_from_projection``'s undo, which restores every file and leaves
+        # the record on disk for the next rebuild to read once the blip clears. Torn or
+        # non-UTF-8 CONTENT still reads as ``None`` here (corruption reads as absent),
+        # so a genuinely corrupt record is still dropped below -- only an I/O error is
+        # treated as "present, read later".
+        cached = read_work_item(slot_key, item_id, strict=True)
+        # Legacy is judged FIRST. A closed record from before the board's first
+        # recorded entry is also terminal, so the forgotten test below would claim
+        # it; but the log never held its create, so it must be ADDED to the total
+        # (``legacy``), not folded into the fold's own count (``forgotten_kept``).
         if cached is not None and _predates(cached.created_at, epoch):
             # Created before this board's first recorded entry: the log never
             # saw it, so the log cannot judge it. It stays as the cache holds it.
             legacy.add(item_id)
             continue
+        if cached is not None and _may_be_forgotten(cached, forgotten):
+            # A closed record the fold does not hold: the cache is where it stays
+            # whole, so it is kept as it is, and counted in the fold's total below.
+            forgotten_kept.add(item_id)
+            continue
         item_path(slot_key, item_id).unlink(missing_ok=True)
         item_events_path(slot_key, item_id).unlink(missing_ok=True)
         removed += 1
-    # The stored bound's counter is set from the record, not carried over from the
-    # cache's header: every item the fold retained is a create the log holds, and
-    # every legacy record kept is one the log may yet hold whole (its first recorded
-    # mutation carries it as a baseline, which takes a fold slot). Nothing else the
-    # fold reports counts -- past the ceiling guard the fold dropped no create, and
-    # a non-zero ``omitted`` there counts entries that are not this board's creates
-    # (stragglers of a purged board, parked lines), which would refuse creates a
-    # board has room for.
+    # The create counter is set from the record, not carried over from the cache's
+    # header: every item the fold held -- still held or forgotten once closed -- is a
+    # create the log holds, and every legacy record kept is one the log may yet hold
+    # whole (its first recorded mutation carries it as a baseline). Nothing else the
+    # fold reports counts: a non-zero ``omitted`` counts entries that are not this
+    # board's creates (stragglers of a purged board, parked lines).
     # Defaults for a cap the cache could not vouch for: cap 20, counted from the
     # board's first create -- the side that asks the user sooner, never later. A
     # kept count start past the new total is clamped so the count cannot go negative.
-    total = len(kept) + len(legacy)
+    # The fold counts every item it held, forgotten closed ones included, so the
+    # board's create count comes from it rather than from what it still holds.
+    # A kept forgotten record is one of the fold's own creates, so it is counted once,
+    # in the fold's total; a legacy record never reached the fold and is added.
+    held = len(kept) + len(forgotten_kept)
+    total = max(held, forgotten.created if forgotten else 0) + len(legacy)
     if not trusted_base:
         base = 0
     elif record.goal_items_base == LEGACY_GOAL_BASE:

@@ -941,6 +941,13 @@ non-ASCII character in more bytes than the state does.
 | `ledger` | 16,100 | a tried row, two fields at `LEDGER_TEXT_LIMIT` (16,065 measured) | flat | 2.8 MiB |
 | `work` | 2,705 | an item with title, summary and decision at their clamps | `WORK_ITEM_LIMIT` x `WORK_EVENT_LIMIT`, plus each item's `acceptance` and `artifacts` at 64 KiB | 165.6 MiB |
 
+The `work` row is the fold's own ceiling, not what a board the store admits reaches. The
+fold forgets a closed item once `WORK_CLOSED_WINDOW` (32) newer closed items sit behind
+it, keeping only its id (`WORK_TOMBSTONE_LIMIT`, 4,096 ids) and its closing state in
+`forgotten`, so a board folds to its open items (at most 32) plus that window: 64 items,
+about a quarter of the ceiling, however many items it ever created
+([rfc-work-fold-forget-closed](../../request-for-change/rfc-work-fold-forget-closed.md)).
+
 A fold may also keep a value WHOLE, with no clamp of its own. `work` keeps three: an
 item's `acceptance` (the one field the store does not cap), its `artifacts` map, and each
 parked entry. A row cost cannot bound those, so each one present is charged

@@ -394,7 +394,6 @@ async def test_every_store_code_maps_to_the_status_the_rfc_tabulates():
         "already_bound": 409,
         "item_closed": 409,
         "item_cap_exceeded": 409,
-        "item_store_full": 409,
         "goal_item_cap_reached": 409,
         "depth_exceeded": 409,
         "crew_log_incomplete": 409,
@@ -509,36 +508,6 @@ async def test_an_item_cap_past_the_ceiling_is_refused_400():
     await two_by_two()
     status, _ = await _record(CONDUCTOR_A, {"action": "goal", "item_cap": 257})
     assert status == 400
-
-
-@pytest.mark.asyncio
-async def test_item_store_full_is_409(monkeypatch):
-    """A board full of closed records refuses the next create as a 409 conflict.
-
-    The code is the store's own, ``item_store_full``: the open cap is not what bit,
-    since nothing on the board is open.
-    """
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 2)
-    items = await two_by_two()
-    status, _ = await _record(
-        CONDUCTOR_A, {"action": "close", "item_id": items["item_a"], "state": "accepted"}
-    )
-    assert status == 200
-    status, body = await _record(
-        CONDUCTOR_A,
-        {"action": "create", "title": "second", "acceptance": {"kind": "human_approval"}},
-    )
-    assert status == 200
-    status, _ = await _record(
-        CONDUCTOR_A, {"action": "close", "item_id": body["item"]["item_id"], "state": "accepted"}
-    )
-    assert status == 200
-    status, body = await _record(
-        CONDUCTOR_A,
-        {"action": "create", "title": "one too many", "acceptance": {"kind": "human_approval"}},
-    )
-    assert status == 409
-    assert body["code"] == wl.CODE_ITEM_STORE_FULL
 
 
 @pytest.mark.asyncio

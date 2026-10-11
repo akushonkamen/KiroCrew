@@ -303,7 +303,7 @@ one file describes the pair, whichever end asks about it. The conductor is the o
 writer, exactly like `bindings/`, so the file needs no lock discipline beyond the
 atomic write itself.
 
-Caps: 32 open items per conductor (closed items do not count toward the open cap and stay on the board) and 256 items stored per conductor in total, open and closed together, measured against `created_total`, a monotonic per-conductor create counter in the header that every create bumps under the conductor lock and that a deleted or lost item record does not lower (the crew log fold's per-board ceiling, so a board is always folded whole; a board at it refuses further creates with `item_store_full` until the finished ledger is purged; a create finding the header unreadable under the lock is refused rather than counted against a pre-lock snapshot), 200 events per item with oldest-dropped, `depth` ≤ 2,
+Caps: 32 open items per conductor (closed items do not count toward the open cap). There is no lifetime bound on creates: per [rfc-work-fold-forget-closed](rfc-work-fold-forget-closed.md), the crew log fold forgets a closed item once 32 newer closed items sit behind it and only counts it, so the fold holds the open items plus the newest 32 closed ones; the cache keeps every record. `created_total`, a monotonic per-conductor create counter in the header that every create bumps under the conductor lock, still counts every create for the goal's spend cap (a create finding the header unreadable under the lock is refused rather than counted against a pre-lock snapshot), 200 events per item with oldest-dropped, `depth` ≤ 2,
 16 channel files per conductor, a channel TTL of at most 86400 seconds and at most 50
 messages over a channel's life. Every cap refuses rather than truncates, because a
 silent truncation leaves the worker believing its report landed whole. `message`
@@ -591,7 +591,7 @@ which is checked against the derived item list rather than trusted from the argu
 `ttl_secs` and `max_messages` default to the caps rather than to unbounded, so a
 conductor that grants a channel carelessly still grants a channel that ends.
 
-Errors: `identity_unresolved` (403), `no_ledger` (404), `unknown_item` (404), `already_bound` (409), `item_closed` (409), `item_cap_exceeded` (409), `item_store_full` (409), `goal_item_cap_reached` (409), `depth_exceeded` (409), `channel_cap_exceeded` (409), `field_too_long` (400), `invalid_action` (400), `invalid_value` (400).
+Errors: `identity_unresolved` (403), `no_ledger` (404), `unknown_item` (404), `already_bound` (409), `item_closed` (409), `item_cap_exceeded` (409), `goal_item_cap_reached` (409), `depth_exceeded` (409), `channel_cap_exceeded` (409), `field_too_long` (400), `invalid_action` (400), `invalid_value` (400).
 
 ### Worker-to-worker communication
 
@@ -798,7 +798,7 @@ rather than noise.
 
 **Oversized payload.** Every string and collection is capped, and a cap refuses with `field_too_long` naming the field. Refusal rather than truncation, because a truncated value that the worker believes landed whole is a silent data loss the worker cannot detect. `work_report`'s `summary` is the one clamped field ([#16669](https://github.com/kirodotdev/KiroCrew/pull/16669)): an over-cap summary is cut to 500 characters, stamped with a truncation marker, and the response tells the worker it was clamped, so the loss is reported rather than silent.
 
-**Unbounded growth.** 32 open items per conductor and 256 items stored per conductor in total, open and closed together, measured against a monotonic per-conductor create counter kept in the header rather than against the records in the directory, so a deleted or lost record reclaims no capacity and the count can never fall below the creates the crew log holds (closed items stay on the board until that stored bound; a board at it refuses further creates, and the ledger sweep removes a finished ledger whole), 200 events per item with oldest-dropped, 16 channels per conductor, one directory per conductor. A ledger cannot grow without bound and cannot grow into another conductor's space.
+**Unbounded growth.** 32 open items per conductor. The fold holds those plus the newest 32 closed items and only counts older closed ones ([rfc-work-fold-forget-closed](rfc-work-fold-forget-closed.md)); the cache keeps every record, and the ledger sweep removes a finished ledger whole. 200 events per item with oldest-dropped, 16 channels per conductor, one directory per conductor. The fold cannot grow without bound; the cache grows with the board's history, one bounded record per item, until the sweep removes the finished ledger; no ledger can grow into another conductor's space.
 
 **Path traversal.** `item_id` is server-minted `it_<8 hex>`, a channel's pair id is two such ids sorted and joined, and the conductor directory name is derived from a hashed session key. No model-supplied string reaches a path component — which is what lets `work_request` and `work_message` take an `item_id` argument at all: the value is validated against the derived item list, and a value that is not a minted id of this ledger never becomes a filename.
 

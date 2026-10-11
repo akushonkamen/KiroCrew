@@ -1409,7 +1409,7 @@ _DASHBOARD_BOOT = tuple("""
     _register_mcp_routes _deferred _deferred setup_spawn_resume_routes
     _deferred_work_ledger _deferred_work_ledger _deferred_work_ledger
     _deferred_work_ledger _deferred_work_ledger _deferred _deferred _deferred _deferred
-    _deferred
+    _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred
@@ -1476,7 +1476,7 @@ _API_BOOT = tuple("""
     _register_mcp_routes _deferred _deferred setup_spawn_resume_routes
     _deferred_work_ledger _deferred_work_ledger _deferred_work_ledger
     _deferred_work_ledger _deferred_work_ledger _deferred _deferred _deferred _deferred
-    _deferred
+    _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred
@@ -1698,8 +1698,8 @@ def _routes(app: web.Application) -> list[tuple[str, str, str]]:
 #: SHA-256 of the MCP route table's ``"<method> <path> <handler>"`` rows in
 #: registration order, and their count. The table is shared by both entrypoints, so a
 #: route added to it on purpose updates these with it.
-_MCP_TABLE_ROWS = 278
-_MCP_TABLE_DIGEST = "b89c0b9c4e6eeef603eaf96d34ca79eb274050121c6919ecd69575f2a185a29a"
+_MCP_TABLE_ROWS = 279
+_MCP_TABLE_DIGEST = "3e82ef9bdee62da54f2f9cbf61a60a3f9504ad6ef39ce2dcdab99a45a96f5010"
 
 
 def test_the_mcp_route_table_keeps_its_rows_and_order() -> None:

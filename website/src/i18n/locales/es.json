@@ -18189,7 +18189,8 @@
       "fresh_start_confirm_action": "Empezar de cero",
       "fresh_start_failed_queued": "Aún hay mensajes en cola. Espera a que terminen y vuelve a intentar Empezar de cero.",
       "fresh_start_failed_busy": "El compañero sigue trabajando y no se detuvo. Detenlo primero y vuelve a intentarlo.",
-      "fresh_start_unsaved_fold": "Olvidó esta conversación y los mensajes quedaron plegados, pero no se guardó la hora en que se plegaron. Al recargar, vuelven a desplegarse."
+      "fresh_start_unsaved_fold": "Olvidó esta conversación y los mensajes quedaron plegados, pero no se guardó la hora en que se plegaron. Al recargar, vuelven a desplegarse.",
+      "dashboard_values_stale": "Los valores en vivo dejaron de actualizarse, así que estos son los últimos recibidos."
     },
     "tasksCapacityCard": {
       "title": "Tareas y capacidad",

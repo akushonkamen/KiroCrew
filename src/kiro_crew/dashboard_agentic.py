@@ -719,13 +719,12 @@ def fold_summary(value: Any) -> str:
         return type(value).__name__
 
 
-def turn_block(slug: str) -> str:
-    """The ``[DASHBOARD]`` lines for a crewmate's turn, or ``""`` when it has none.
+def page_in_force(slug: str) -> tuple[Any, TemplateManifest] | None:
+    """The instance record a crewmate's tab shows and its parsed manifest, or ``None``.
 
-    A few lines on purpose: which page is in force and which fields are the
-    crewmate's to write. The shapes and the mistake book stay behind
-    ``dashboard_fields``, because a block on every turn is paid for on every turn.
-    TOTAL: a dashboard that cannot be read costs the turn this block, nothing else.
+    The one lookup :func:`turn_block` and ``dashboard_upkeep`` share, so the block and
+    the upkeep skill always describe one page. TOTAL: a record that cannot be read is
+    no page.
     """
     try:
         from kiro_crew.dashboard_templates import instance as instance_store
@@ -735,23 +734,43 @@ def turn_block(slug: str) -> str:
         if record.state == instance_store.STATE_EMPTY:
             fallback = instance_store.default_instance(slug)
             if fallback is None:
-                return ""
+                return None
             record = fallback
         elif record.state not in (instance_store.STATE_LIVE, instance_store.STATE_STALE):
-            return ""
-        manifest = parse_manifest(dict(record.manifest))
+            return None
+        return record, parse_manifest(dict(record.manifest))
     except Exception:
-        logger.debug("no [DASHBOARD] block for %r", slug, exc_info=True)
+        logger.debug("no dashboard page in force for %r", slug, exc_info=True)
+        return None
+
+
+def turn_block(slug: str) -> str:
+    """The ``[DASHBOARD]`` lines for a crewmate's turn, or ``""`` when it has none.
+
+    A few lines on purpose: which page is in force, which fields are the crewmate's
+    to write, and the ONE pointer line naming the upkeep skill that says what each
+    means and when and how to write it. The shapes and the mistake book stay behind
+    ``dashboard_fields``, and the upkeep behind the skill, because a block on every
+    turn is paid for on every turn.
+    TOTAL: a dashboard that cannot be read costs the turn this block, nothing else.
+    """
+    page = page_in_force(slug)
+    if page is None:
         return ""
+    record, manifest = page
     names = sorted(agentic_fields(manifest))
     writes = ", ".join(names) if names else "none (every field is folded)"
-    return (
+    block = (
         "[DASHBOARD]\n"
         f"Your dynamic dashboard is template {manifest.id} v{manifest.version}; the "
         "Dashboard tab shows it only with the 'Dynamic Dashboard' Feature Preview on.\n"
         f"Fields you write: {writes}. Call dashboard_fields for their shapes and "
         "current values before dashboard_write."
     )
+    from kiro_crew import dashboard_upkeep  # the upkeep module reads this one
+
+    skill = dashboard_upkeep.sync(slug, page=(record, manifest))
+    return block + ("\n" + dashboard_upkeep.pointer(skill) if skill is not None else "")
 
 
 def _recent_history(history: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:

@@ -688,7 +688,24 @@ def _commit(
         "at_ms": at_ms,
     }
     _append_history(slug, entry, session_id)
-    return read(slug)
+    record = read(slug)
+    _sync_upkeep(record)
+    return record
+
+
+def _sync_upkeep(record: Instance) -> None:
+    """Regenerate the crewmate's upkeep skill for the version just committed.
+
+    Every adopt, apply, rollback and edit reaches here, so a page swap rewrites the skill
+    in the same call. Handed the record, so the skill is built without a second read of
+    the store while its lock is held. Best effort: the version is already written.
+    """
+    try:
+        from kiro_crew import dashboard_upkeep
+
+        dashboard_upkeep.sync(record.slug, page=(record, parse_manifest(dict(record.manifest))))
+    except Exception:
+        logger.warning("dashboard instance: upkeep skill not regenerated", exc_info=True)
 
 
 def _append_history(slug: str, entry: dict[str, Any], session_id: str) -> None:

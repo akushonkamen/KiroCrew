@@ -464,7 +464,7 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             return redact(f"Error: {api_err}")
         return redact(
             f"Your crewmate's page is now version {d.get('instance_version')}, "
-            f"from template `{d.get('template_id')}`.\n{DASHBOARD_PREVIEW_NOTE}"
+            f"from template `{d.get('template_id')}`.\n{DASHBOARD_PREVIEW_NOTE}" + _guide_tail(d)
         )
 
     if name == "dashboard_rollback":
@@ -486,10 +486,20 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         return redact(
             f"Restored version {d.get('restored_from')} as version "
             f"{d.get('instance_version')} -- a rollback moves forward, so the page you "
-            "were on is still there to go back to."
+            "were on is still there to go back to." + _guide_tail(d)
         )
 
     return f"Error: unknown tool '{name}'"
+
+
+def _guide_tail(d: dict[str, Any]) -> str:
+    """The new page's ``[DASHBOARD]`` block and upkeep pointer, after a blank line.
+
+    The prompt carries them only from the next session start or compaction, so the
+    reply that changed the page hands over the new ones now.
+    """
+    block = d.get("dashboard")
+    return f"\n\n{block}" if isinstance(block, str) and block else ""
 
 
 def _render_templates(payload: dict[str, Any]) -> str:

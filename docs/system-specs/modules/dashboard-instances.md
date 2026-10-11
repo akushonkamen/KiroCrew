@@ -255,6 +255,29 @@ describe a change the existing three already name.
 The preview is discarded once the version lands, so "keep this one" cannot be answered
 twice and quietly write two versions of one page.
 
+## Every commit regenerates the upkeep skill
+
+A fold field fills itself from the crew log; an agentic field is the crewmate's to
+write. `dashboard_upkeep` writes one generated skill per crewmate,
+`<skills dir>/.dashboard-upkeep/<slug>/SKILL.md`, with one section per agentic field
+(what it means, when to write it, how) from the field's `upkeep` key, plus a copy of
+each shipped helper under `scripts/`. A helper fetches data the crew log does not hold
+(PR checks via `gh`) and prints a ready `dashboard_write` payload. The dot directory
+keeps the skill out of the skills index.
+
+`_commit` calls `dashboard_upkeep.sync` with the record it just wrote, so adopt, apply,
+rollback and edit each rewrite the skill and drop a helper the new page no longer
+names. `turn_block` calls it too -- a crewmate on the default page never commits, and a
+gateway upgrade can change the shipped text -- and adds the one pointer line that names
+the skill, which rides the member section through every compaction. `sync` writes only
+what differs, so it also puts back a hand edit.
+
+The text and the helpers are read from the SHIPPED catalog entry. The crewmate's copy
+of the manifest is on the agent-writable side and `edit` may change it, so its `upkeep`
+is never read; only a `builtin` template may name a helper. The profile's Notes tab
+shows the same skill (`GET /api/members/{slug}/briefing` `upkeep`). Decision:
+`rfc-crewmate-dashboard-upkeep-skill.md`.
+
 ## The preview link is the ordinary read with `?preview=1`
 
 `GET /api/members/{slug}/dashboard?preview=1` serves the staged page through the same

@@ -318,6 +318,11 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
         /** The file ran past the briefing cap, so the text above ends in the
          *  truncation marker instead of the tail; the panel says so above the
          *  notes. */
+        /** SYSTEM-owned, beside the agent's notes: the generated upkeep skill for
+         *  the crewmate's Dashboard page -- the pointer line its prompt carries, the
+         *  skill text, and its helper script names -- or null when it has no page.
+         *  Absent from an older gateway. */
+        upkeep?: { pointer: string; skill: string; scripts: string[] } | null
         truncated: boolean
       }>,
     // The work a crewmate holds (open goals, recent sessions), read for its

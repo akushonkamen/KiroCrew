@@ -45,6 +45,58 @@ logger = logging.getLogger(__name__)
 _MIRROR_PREFIX = "mirror:"
 _RENDERED_AGENT_FILE = "kirocrew.json"
 
+# Never a sha256 hexdigest and never None, so the comparisons that read it cannot
+# confuse it with either real answer of :func:`_module_artifact_key`.
+_UNPROVABLE = "\x00unprovable-url"
+_PROVABLE_HOST = re.compile(r"[a-z0-9._-]+")
+_PROVABLE_PATH = re.compile(r"[\x21-\x7e]*")
+# A backslash anywhere, or "." / ".." as a whole path segment -- shapes WHATWG
+# rewrites before hashing while urlsplit keeps them verbatim. See
+# :func:`_module_artifact_key`.
+_URL_DOT_SEGMENT_RE = re.compile(r"\\|(?:\A|/)\.\.?(?:/|\Z)")
+
+
+def _module_artifact_key(url: object) -> str | None:
+    """``grant_key`` of a validated URL, ``None`` when the pair provably is not
+    ours, or ``_UNPROVABLE`` when equality can be neither proven nor refuted.
+
+    The module-level home of the Disconnect judge's own ``_artifact_key`` (which
+    delegates here), so the destructive revoke and the read-only
+    :func:`grant_sharers_map` share ONE definition of grant identity rather than two
+    that can drift. Pure and byte-for-byte identical to the closure it replaced:
+    the string screened is the string hashed, equality is asserted only inside
+    the PROVABLE set (lowercase-ASCII LDH host, printable-ASCII path free of
+    ``%``, backslashes and dot-segments, no scheme-default port spelled out)
+    where urlsplit and kiro-cli's WHATWG parser serialize identically, and
+    outside it the answer is ``_UNPROVABLE`` so the caller fails closed.
+    """
+    from kiro_crew.connections.tool_aliases import normalized_endpoint
+    from kiro_crew.mcp_grant import grant_key
+
+    if not isinstance(url, str):
+        return None
+    candidate = url.strip()
+    if normalized_endpoint(candidate) is None:
+        return None
+    parts = urlsplit(candidate)
+    host = (parts.hostname or "").lower()
+    path = parts.path or "/"
+    provable = (
+        _PROVABLE_HOST.fullmatch(host) is not None
+        and _PROVABLE_PATH.fullmatch(path) is not None
+        and "%" not in path
+        and _URL_DOT_SEGMENT_RE.search(path) is None
+        and not (parts.scheme.lower() == "http" and parts.port == 80)
+    )
+    if not provable:
+        return _UNPROVABLE
+    try:
+        return grant_key(candidate)
+    except ValueError:
+        # UnicodeError (IDNA) is a ValueError; nothing else in grant_key
+        # raises it for a screened provable-charset string.
+        return None
+
 
 def is_scope_label(label: str) -> bool:
     """Whether ``label`` names an mcp.json scope the purge can be restricted to.
@@ -361,76 +413,10 @@ async def remove_provider_entry(
     wanted = normalized_endpoint(mcp_url)
     wanted_key = grant_key(mcp_url)
 
-    # Never a sha256 hexdigest and never None, so the comparisons below cannot
-    # confuse it with either real answer.
-    _UNPROVABLE = "\x00unprovable-url"
-    _PROVABLE_HOST = re.compile(r"[a-z0-9._-]+")
-    _PROVABLE_PATH = re.compile(r"[\x21-\x7e]*")
-    # A backslash anywhere, or "." / ".." as a whole path segment. Both are shapes
-    # WHATWG rewrites before hashing (backslash folds to "/", dot-segments are
-    # removed) while urlsplit keeps them verbatim. One regex rather than a
-    # `/`-split because splitting a URL path on a literal "/" also reads as
-    # filesystem path assembly to the cross-platform scan, and this is a URL,
-    # where "/" is the only separator RFC 3986 defines.
-    _URL_DOT_SEGMENT_RE = re.compile(r"\\|(?:\A|/)\.\.?(?:/|\Z)")
-
-    def _artifact_key(url: object) -> str | None:
-        """``grant_key`` of a validated URL, ``None`` when the pair provably is
-        not ours, or ``_UNPROVABLE`` when equality can be neither proven nor
-        refuted.
-
-        ONE pipeline: the string that is screened is BYTE-IDENTICAL to the string
-        that is hashed. One malformed shape -- a trailing space after an explicit
-        port, which ``urlsplit`` lstrips only -- slips through when
-        ``normalized_endpoint`` parses ``value.strip()`` while ``grant_key`` parses
-        the raw value, so the screen's guarantee never transfers unless both parse
-        identical bytes.
-
-        THREE-valued, because two implementations compute this key. kiro-cli
-        derives the artifact pair with the WHATWG url parser, which
-        percent-decodes hostnames, IDNA-maps Unicode hosts, normalizes
-        dot-segments and backslashes, and percent-encodes non-ASCII paths --
-        transformations ``urlsplit`` does not perform. Hashing such a URL here
-        answers a question about different bytes than the ones kiro-cli hashed:
-        ``%6dcp.notion.com`` and ``/a/../mcp`` both name the
-        registry pair over there while missing it here, with no exception
-        anywhere. So key equality is asserted only inside the PROVABLE set --
-        lowercase-ASCII LDH hosts and printable-ASCII paths free of ``%``,
-        backslashes and dot-segments, with no scheme-default port spelled out --
-        where both parsers' serializations are byte-identical by construction.
-        Outside that set the answer is ``_UNPROVABLE`` and the caller fails
-        closed: the grant is kept and the census reported incomplete, because
-        deleting on an unprovable comparison is how a live consent dies.
-
-        Within the provable set, ``None`` still means SKIP, on two premises that
-        stay sound: unparseable junk (the round-3/4 shapes) can hold no pair
-        under either parser, and a provable-charset host that Python's IDNA
-        refuses (empty or >63-char label) is serialized verbatim by kiro-cli and
-        differs from the registry host, so its key provably is not ours.
-        """
-        if not isinstance(url, str):
-            return None
-        candidate = url.strip()
-        if normalized_endpoint(candidate) is None:
-            return None
-        parts = urlsplit(candidate)
-        host = (parts.hostname or "").lower()
-        path = parts.path or "/"
-        provable = (
-            _PROVABLE_HOST.fullmatch(host) is not None
-            and _PROVABLE_PATH.fullmatch(path) is not None
-            and "%" not in path
-            and _URL_DOT_SEGMENT_RE.search(path) is None
-            and not (parts.scheme.lower() == "http" and parts.port == 80)
-        )
-        if not provable:
-            return _UNPROVABLE
-        try:
-            return grant_key(candidate)
-        except ValueError:
-            # UnicodeError (IDNA) is a ValueError; nothing else in grant_key
-            # raises it for a screened provable-charset string.
-            return None
+    # Module-level constants (``_UNPROVABLE``) and the artifact-key derivation now
+    # live at module scope so the read-only ``grant_sharers_map`` shares this exact
+    # identity rule; the local name is kept so ``_judge`` reads unchanged.
+    _artifact_key = _module_artifact_key
 
     def _judge(configured: list, specs: dict) -> tuple[
         tuple[str, ...],
@@ -748,4 +734,124 @@ async def remove_provider_entry(
         census_incomplete=census_gap,
         census_unreadable=tuple(_census_source_name(label) for label in unreadable),
         attempted_urls=tuple(attempted),
+    )
+
+
+@dataclass(frozen=True)
+class GrantSharing:
+    """Whether a provider's stored grant is also configured by another entry.
+
+    A READ-ONLY view of the same ownership question :func:`remove_provider_entry`
+    answers destructively, so the Connections status feed can say *proactively*
+    that a connection is backed by a shared OAuth grant -- without the user having
+    to attempt a Disconnect to learn it from the refusal.
+
+    ``shared_with`` names the OTHER entries that configure the same grant
+    artifacts (``grant_key`` equality, the artifact-pair identity, not the
+    endpoint identity -- a ``?workspace=`` variant shares the pair). Empty means
+    the grant is this provider's alone, *as far as the census could see*.
+
+    ``census_incomplete`` is why an empty ``shared_with`` must not be read as
+    "definitely not shared": a source the census could not read, or an entry
+    whose URL could not be safely compared, could hide a sharer. The caller is
+    told so it can soften the copy ("could not confirm") rather than assert sole
+    ownership on a partial read -- the same fail-closed stance the destructive
+    path takes, minus the act.
+    """
+
+    shared_with: tuple[str, ...]
+    census_incomplete: bool
+
+
+async def grant_sharers_map(
+    providers: list[tuple[str, str]], project_dirs: tuple[Path, ...] = ()
+) -> dict[str, GrantSharing]:
+    """Who else configures each provider's grant artifacts -- read-only, no lock, no purge.
+
+    Reuses :func:`spec_census` and the SAME provable-key discipline
+    (:func:`_module_artifact_key`, which the Disconnect judge also calls) so the
+    "shared" verdict the status feed shows and the keep decision a later
+    Disconnect makes come from one definition of grant identity rather than two
+    that can drift. It asks the narrower question the feed needs -- is the
+    REGISTRY pair shared -- not the full per-owned-key purge analysis, because
+    nothing here deletes anything.
+
+    Network-free and off the loop: the census stats the user's MCP config and
+    agent spec files, either of which can sit on a network mount, matching the
+    status module's invariant that no filesystem op runs on the event loop. No
+    MCP lock is taken: a read cannot corrupt the store, and the honest answer for
+    a config that changes mid-read is simply the snapshot it saw.
+
+    The census reads the SAME sources no matter which provider is asked, so this
+    runs it ONCE and walks the result per slug -- the status feed answers for
+    every visible provider at once and must not pay N identical file scans.
+    ``providers`` is ``(slug, mcp_url)`` pairs; the result is keyed by slug.
+    """
+    if not providers:
+        return {}
+    specs, unreadable = await asyncio.to_thread(spec_census, project_dirs)
+    unreadable_sources = bool(unreadable)
+    return {
+        slug: _sharers_from_specs(slug, mcp_url, specs, unreadable_sources)
+        for slug, mcp_url in providers
+    }
+
+
+def _sharers_from_specs(
+    slug: str, mcp_url: str, specs: dict[str, dict[str, Any]], unreadable_sources: bool
+) -> GrantSharing:
+    """One provider's sharers from an already-read census. Pure, no I/O.
+
+    Mirrors the destructive judge's ownership-first/sharer-second shape so the two
+    cannot disagree: an entry that IS this provider at this endpoint owns the pair
+    and is never its own sharer, a mirrored ``slug`` row is the owner's reflection
+    the Disconnect strips in the same transaction, and every other entry whose
+    provable key equals the registry key is a sharer. An entry whose URL cannot be
+    safely compared sets ``census_incomplete`` -- the fail-closed stance, so an
+    empty sharer set never reads as proven sole ownership.
+
+    If THIS provider's own registry URL cannot be keyed (``grant_key`` raises on
+    a malformed URL), that is this provider's problem alone: hedge it with
+    ``census_incomplete`` rather than letting the exception escape and drop the
+    hint for every other provider in the same feed.
+    """
+    from kiro_crew.connections.tool_aliases import normalized_endpoint
+    from kiro_crew.mcp_grant import grant_key
+
+    wanted = normalized_endpoint(mcp_url)
+    try:
+        wanted_key = grant_key(mcp_url)
+    except ValueError:
+        # A URL this registry entry cannot be keyed: we cannot prove who shares
+        # it, so hedge THIS entry (census_incomplete) and leave the rest of the
+        # feed's hints intact.
+        return GrantSharing(shared_with=(), census_incomplete=True)
+
+    sharers: set[str] = set()
+    unprovable = False
+    for label, entries in specs.items():
+        for name, spec in entries.items():
+            if not isinstance(spec, dict):
+                continue
+            url = spec.get("url")
+            if name == slug and is_scope_label(label):
+                candidate = url.strip() if isinstance(url, str) else url
+                if normalized_endpoint(candidate) == wanted:
+                    continue  # ours: the owner, not a sharer
+            if name == slug and label.startswith(_MIRROR_PREFIX):
+                # The rendered agent file / provider sidecars REFLECT the scope
+                # entries above; a Disconnect strips the ``slug`` name from them in
+                # the same transaction. So a mirrored ``slug`` row is the owner's
+                # reflection, not an independent holder, and counting it would
+                # report the grant "shared with" its own mirror.
+                continue
+            key = _module_artifact_key(url)
+            if key == _UNPROVABLE:
+                unprovable = True
+            elif key is not None and key == wanted_key:
+                sharers.add(name)
+
+    return GrantSharing(
+        shared_with=tuple(sorted(sharers)),
+        census_incomplete=unreadable_sources or unprovable,
     )

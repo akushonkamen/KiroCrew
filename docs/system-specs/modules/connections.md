@@ -94,6 +94,21 @@ until the runtime actually fails a call (or the artifacts are removed locally).
 The inverse direction — a grant present but the badge stale-downgraded —
 self-heals within one 30-second poll.
 
+**Proactive shared-grant signal.** When a provider's grant is present, the feed
+also reports whether the SAME OAuth artifacts are configured by another entry
+(`grantSharedWith` names those entries; `grantSharedUnconfirmed` says the census
+could not read every source, so an empty list is "could not confirm" rather than
+"sole owner"). This asks the same grant-identity rule `remove_provider_entry`
+uses — one definition of grant identity (`ownership._module_artifact_key`) — of
+the registry pair, read-only here with no lock or purge. It is the narrower
+question the feed needs (is the REGISTRY pair shared) rather than the full
+per-owned-key purge analysis a Disconnect runs, so the two cannot disagree on
+what grant identity means. The card can say a connection is backed
+by a shared grant, and that a local disconnect/reconnect keeps that shared token
+rather than forcing fresh consent, WITHOUT the user first attempting a Disconnect
+and reading the refusal. It is only the sharing fact; forcing a new sign-in on a
+shared grant still means revoking at the provider.
+
 The explicit **Test** action is the opt-in liveness check and does not change the
 badge's polling contract. Owner-only `POST /api/connections/test` starts a
 promptless kiro-cli ACP session, so bearer injection stays inside kiro-cli. Its

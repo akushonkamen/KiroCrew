@@ -459,6 +459,15 @@ interface ConnectionCardProps {
    *  `state`, because two substates share `not-verified`: a confirmed absence
    *  can name itself, while an unknowable one must keep the honest hedge. */
   grantPresent?: boolean
+  /** Other configured MCP entries backed by the SAME OAuth grant as this
+   *  provider, from /api/connections/status. Non-empty only when the grant is
+   *  present AND shared. Drives a proactive note so a user learns the connection
+   *  is shared (and that a local disconnect/reconnect keeps the token) without
+   *  having to attempt a Disconnect first. */
+  grantSharedWith?: string[]
+  /** True when the shared-grant census could not read every source, so an empty
+   *  `grantSharedWith` is "could not confirm sole ownership", not "unshared". */
+  grantSharedUnconfirmed?: boolean
   busy?: ConnectionAction
   /** The provider NAME (not slug) of whichever card currently owns the single
    *  in-flight Connections Test, or undefined when none is running. Used only
@@ -634,6 +643,8 @@ function ConnectionCard({
   oauth,
   connectedSince,
   grantPresent,
+  grantSharedWith,
+  grantSharedUnconfirmed,
   busy,
   testingProvider,
   feedbackSlots,
@@ -1142,7 +1153,17 @@ function ConnectionCard({
                 <dd className="m-0 text-text">{fmtDate((connectedSince || server?.connectedSince) as string)}</dd>
               </dl>
             )}
-            <div className="flex justify-end gap-2">
+            {/* The shared-grant state (shared with whom, or could-not-confirm)
+                and its disconnect/reconnect caveat BOTH ride in the single
+                action-row PrerequisiteTip below, never an always-visible band:
+                the connection-card-caveat-tip rule keeps one triangle per action
+                and the card the same height in every state. */}
+            {/* Test and Disconnect are visually separated groups (never three
+                peer buttons): the shared-grant caveat tip sits in the Disconnect
+                group, immediately before Disconnect, because it qualifies that
+                action -- the connection-card-caveat-tip convention, reusing the
+                shared PrerequisiteTip heading and label. */}
+            <div className="flex items-center justify-between gap-2">
               <Btn
                 onClick={() => void onTest()}
                 disabled={!!busy || !!testingProvider}
@@ -1152,9 +1173,22 @@ function ConnectionCard({
                 {busy === 'test' ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <RotateCw className="w-3.5 h-3.5" aria-hidden="true" />}
                 {busy === 'test' ? t('pages.connectionsPage.testing') : t('pages.connectionsPage.test_connection')}
               </Btn>
-              <Btn danger onClick={() => void onDisconnect()} disabled={!!busy}>
-                <Unplug className="w-3.5 h-3.5" aria-hidden="true" /> {t('pages.connectionsPage.disconnect')}
-              </Btn>
+              <div className="flex items-center gap-2">
+                {(grantSharedWith && grantSharedWith.length > 0) || grantSharedUnconfirmed ? (
+                  <PrerequisiteTip
+                    label={t('pages.connectionsPage.prerequisites_for_provider', { provider: provider.name })}
+                    heading={t('pages.connectionsPage.before_you_connect')}
+                    text={`${
+                      grantSharedWith && grantSharedWith.length > 0
+                        ? t('pages.connectionsPage.grant_shared_fact', { names: grantSharedWith.join(', ') })
+                        : t('pages.connectionsPage.grant_shared_fact_unconfirmed')
+                    } ${t('pages.connectionsPage.grant_shared_caveat')}`}
+                  />
+                ) : null}
+                <Btn danger onClick={() => void onDisconnect()} disabled={!!busy}>
+                  <Unplug className="w-3.5 h-3.5" aria-hidden="true" /> {t('pages.connectionsPage.disconnect')}
+                </Btn>
+              </div>
             </div>
           </div>
         )}
@@ -1957,6 +1991,8 @@ export default function ConnectionsPage({ servicesEnabled = false }: { servicesE
                     // The same confirmed-only verdict the state fold received:
                     // indeterminate stays undefined so the card keeps the hedge.
                     grantPresent={confirmedGrantPresent(status)}
+                    grantSharedWith={status?.grantSharedWith}
+                    grantSharedUnconfirmed={status?.grantSharedUnconfirmed}
                     busy={cardBusy}
                     testingProvider={testingProvider}
                     feedbackSlots={feedbackSlots}

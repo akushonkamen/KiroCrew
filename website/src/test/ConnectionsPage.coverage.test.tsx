@@ -1756,6 +1756,72 @@ describe('the authorization status feed', () => {
     expect(within(card('notion')).queryByText(/Connected since/i)).not.toBeInTheDocument()
   })
 
+  it('shows a proactive shared-grant note when the grant is shared', async () => {
+    mcpServers.mockResolvedValue([server({ status: 'ok' })])
+    connectionsStatus.mockResolvedValue({
+      schema_version: 1,
+      connections: [{
+        slug: 'notion',
+        status: 'connected',
+        grantPresent: true,
+        grantSharedWith: ['atlassian'],
+      }],
+    })
+    mount()
+
+    await waitFor(() => expect(card('notion')).toHaveAttribute('data-state', 'connected'))
+    // The sharer fact and the disconnect/reconnect caveat BOTH ride in the one
+    // Disconnect-side caveat tip (connection-card-caveat-tip), never an
+    // always-visible band: nothing shared-grant renders inline until the tip
+    // is opened.
+    expect(within(card('notion')).queryByText(/shares its stored authorization/i)).not.toBeInTheDocument()
+    const icon = await waitFor(() =>
+      within(card('notion')).getByRole('button', { name: 'Notion prerequisites' }),
+    )
+    fireEvent.mouseEnter(icon)
+    const bubble = screen.getByRole('tooltip')
+    expect(within(bubble).getByText('Before you connect')).toBeInTheDocument()
+    expect(bubble).toHaveTextContent(/shares its stored authorization with: atlassian/i)
+    // and the caveat about what Disconnect does, in the same bubble
+    expect(bubble).toHaveTextContent(/reconnecting reuses it/i)
+  })
+
+  it('hedges the shared-grant note when the census is incomplete', async () => {
+    mcpServers.mockResolvedValue([server({ status: 'ok' })])
+    connectionsStatus.mockResolvedValue({
+      schema_version: 1,
+      connections: [{
+        slug: 'notion',
+        status: 'connected',
+        grantPresent: true,
+        grantSharedUnconfirmed: true,
+      }],
+    })
+    mount()
+
+    await waitFor(() => expect(card('notion')).toHaveAttribute('data-state', 'connected'))
+    const icon = await waitFor(() =>
+      within(card('notion')).getByRole('button', { name: 'Notion prerequisites' }),
+    )
+    fireEvent.mouseEnter(icon)
+    const bubble = screen.getByRole('tooltip')
+    expect(bubble).toHaveTextContent(/could not be read to confirm/i)
+  })
+
+  it('shows no shared-grant tip for a solely-owned connected grant', async () => {
+    mcpServers.mockResolvedValue([server({ status: 'ok' })])
+    connectionsStatus.mockResolvedValue({
+      schema_version: 1,
+      connections: [{ slug: 'notion', status: 'connected', grantPresent: true }],
+    })
+    mount()
+
+    await waitFor(() => expect(card('notion')).toHaveAttribute('data-state', 'connected'))
+    expect(within(card('notion')).queryByText(/shares its stored authorization/i)).not.toBeInTheDocument()
+    // No sharer and no hedge: the Disconnect-side caveat triangle is absent too.
+    expect(within(card('notion')).queryByRole('button', { name: 'Notion prerequisites' })).not.toBeInTheDocument()
+  })
+
   it('cancel escapes the waiting card even while the poll cached awaiting_consent', async () => {
     // The refresh-mid-consent state: no per-tab wait survives a reload, so the
     // waiting card here comes entirely from the backend's awaiting_consent

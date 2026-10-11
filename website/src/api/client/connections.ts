@@ -52,6 +52,16 @@ export interface ConnectionStatus {
   /** True for a pre-registered provider whose operator has not entered a usable
    *  OAuth client; present only when true and never alongside a held grant. */
   needsClientConfig?: boolean
+  /** Other configured MCP entries backed by the SAME OAuth grant as this provider.
+   *  Present and non-empty only for a provider whose grant is present AND shared.
+   *  It lets the card show, proactively, that a local disconnect/reconnect keeps
+   *  the shared token rather than forcing fresh consent, without the user having
+   *  to attempt a Disconnect. Names only, never a credential. */
+  grantSharedWith?: string[]
+  /** True when the shared-grant census could not read every source, so an empty
+   *  `grantSharedWith` means "could not confirm sole ownership", not "unshared".
+   *  Present only when true and the grant is present. */
+  grantSharedUnconfirmed?: boolean
 }
 
 /** Where a client-record half came from; `null` means not set anywhere. */

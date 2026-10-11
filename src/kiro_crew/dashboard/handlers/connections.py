@@ -602,7 +602,7 @@ async def api_connections_status(request: web.Request) -> web.Response:
     # a route no expiry path anticipated; cheap enough to run per request because
     # liveness is a returncode read, not I/O.
     await expire_dead_mints()
-    statuses = await collect_connection_statuses()
+    statuses = await collect_connection_statuses(_open_project_dirs(request.app.get("state")))
     return web.json_response({"schema_version": _STATUS_SCHEMA_VERSION, "connections": statuses})
 
 

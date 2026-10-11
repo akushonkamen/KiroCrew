@@ -25,10 +25,16 @@ superseded-by: []
   this bullet, that the repository takes no standalone RFC pull request and so
   this document could only ship inside its implementation, no longer holds: the
   amendment of 2026-10-11 below landed on its own.
-- Where this document and its amendment disagree, **the amendment holds**. The
-  one of 2026-10-11 at the end supersedes §Migration plan's P2 row and the three
-  passages that withheld an agent-written page until this gateway minted a
-  wrapper document around it.
+- Where this document and its amendments disagree, **the amendment holds**. The
+  one of 2026-10-11 on the minted wrapper supersedes §Migration plan's P2 row
+  and the three passages that withheld an agent-written page until this gateway
+  minted a wrapper document around it.
+- **Read [Amendment, 2026-10-11, supersedes the template model](#amendment-2026-10-11-supersedes-the-template-model)
+  before the Design sections.** The body below is the template model, where a
+  crewmate adopts one of the built-in pages. That is superseded: the owner agent
+  writes the page, it is stored as an artifact of `kind="dashboard"`, and no
+  template is loaded by id at run time -- the shipped pages stay as a reference
+  gallery to copy and adapt. That amendment records the sections it replaces.
 - Author: written up by the crew that implements it.
 - Created: 2026-10-03
 - Related:
@@ -738,3 +744,62 @@ rather than taking effect immediately, and a save-time lint on a hard-coded
 number WARNS rather than refuses. Keep this text when that work lands -- the
 flow is the premise the wrapper exemption above was granted on, so removing the
 gate would reopen the decision rather than simplify it.
+
+## Amendment, 2026-10-11, supersedes the template model
+
+The amendment above settles who may write a page and why its frame may run it.
+This one settles what the product does with the pages that shipped. The design
+body is the template model: a crewmate adopts one of the built-in pages, and
+the page it gets is the nearest shipped shape. This amendment replaces that.
+The body above is left as written; where the two disagree, this section holds.
+
+Approved as a T3 design on issue
+[#18642](https://github.com/kirodotdev/KiroCrew/issues/18642), whose one-pager a
+maintainer signed off. This section carries the decision into the document the
+First Principles lane reads; the status field above stays `partial`, which is
+already non-draft, because the implementation is in flight rather than
+accepted-and-shipped.
+
+**The page is HTML its owner agent writes.** Free layout, and the fragment may
+run JS, which is what makes a chart possible. It is stored as an artifact of
+`kind="dashboard"`, so it carries versions, read, share and revert like any
+artifact, and needs no second store with its own history. A version follows a
+page change; **data never cuts a version**.
+
+**No template is loaded by id at run time, and there is no default page.** This
+supersedes the Registry row of "Templates are copied, versioned and shared" --
+"Built-in templates ship in the repo, and in P1 they are the only ones a
+crewmate can be given" -- together with that section's adopt, share and snapshot
+rows, and the parts of "Relationship to the dev-time template package already on
+main", "How the page is drawn", "Migration plan", "What P1 ships ahead of its
+UI" and "The agent surface for the page itself" that rest on a crewmate picking a
+shipped page. The shipped pages remain in the tree as a **reference gallery**:
+source an agent reads, copies and adapts. Nothing resolves one by id, and with
+no saved page the tab shows an empty state rather than falling back to one.
+
+**Values arrive as events, and the controller is the only gate.** A fold moves,
+the controller checks the owner, redacts, and pushes the changed fields to the
+page. The page subscribes to the fields its own model lists, and only those
+reach it: `window.kirocrew.subscribe(name, cb)` calls back on first load and on
+every push carrying that field. A version gap triggers a full refetch. No model
+turn is spent on an update.
+
+**The flow is stage, preview, ask, apply, and only the owner may run it.** A
+worker never touches the page; it reports, and the ledger fold carries that on.
+`artifact_revert` undoes a page change. The staged copy a person looks at before
+anything lands is the save tool's own work and is not on the tree yet, so until
+it is, the invariant the flow exists for is carried by asking BEFORE the save:
+the skill teaches that, because saving is what lands a page today.
+
+**What the design above settled is unchanged.** Every number is computed from
+the record and never typed by the agent. The frame contract is the one the P2
+amendment restates, plus the stale rule: a field whose source did not resolve
+is reported rather than guessed at. Redaction and the owner check stay in the
+controller, so a page's own layout cannot move a value past them.
+
+**One `dashboard` skill carries what the template set used to**: who owns the
+page and the stage-preview-ask-apply flow, the design-freedom and honesty rules,
+the manager view's five questions and one-screen limits, the frame contract, the
+fold catalogue, the theme and accessibility contract, and the gallery. Its
+gallery lists each page as one optional example; none is the default, and a page
+that uses none of them is a correct page.

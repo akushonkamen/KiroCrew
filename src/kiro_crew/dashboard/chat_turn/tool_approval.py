@@ -72,6 +72,15 @@ def _spec_confirm_hooks_notice(agent: str, count: int) -> str:
     )
 
 
+def _spec_withheld_hooks_notice(agent: str) -> str:
+    """The session-start notice for a project spec's ``hooks`` Crew does not run."""
+    return (
+        f"ℹ This project's own spec for agent {agent} sets hooks. Crew does not "
+        "run commands from a project checkout, so those hooks do not run in this "
+        "session. Hooks from your user-level spec of that name still run."
+    )
+
+
 #: Deny classes a credential-vending MCP server can actually resolve. Only these
 #: justify the capability-manager lookup: the hint is appended for them alone, so
 #: probing on any other refusal would spend a subprocess to produce a string

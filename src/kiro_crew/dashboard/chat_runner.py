@@ -85,6 +85,7 @@ from kiro_crew.agent_sdk.spec_hooks import (
     reproject_claimed_session,
     session_agent,
     spec_project_dir,
+    withheld_project_spec_hooks,
 )
 from kiro_crew.agent_sdk.tool_search import resume_takes_tool_search_replay
 from kiro_crew.agent_spec_format import NATIVE_SKILL_ALIAS_PREFIX
@@ -278,6 +279,7 @@ from kiro_crew.dashboard.chat_turn.tool_approval import (  # noqa: F401
     _slot_is_trusted,
     _spec_confirm_hooks_notice,
     _spec_keys_notice,
+    _spec_withheld_hooks_notice,
 )
 from kiro_crew.dashboard.chat_turn.turn_context import (  # noqa: F401
     _detach_appended_context,
@@ -1031,7 +1033,36 @@ async def _prepare_spec_hooks(
             _redact_display_text(_spec_confirm_hooks_notice(agent, unconfirmable)),
             "msg msg-info",
         )
+    if is_new:
+        await _surface_withheld_project_hooks(state, slot, client, agent)
     return hooks, False, work_dir
+
+
+async def _surface_withheld_project_hooks(
+    state: "DashboardState", slot: "_ChatSlot", client: Any, agent: str
+) -> None:
+    """One notice row when the checkout's own spec sets ``hooks`` Crew does not run.
+
+    The hooks are withheld by :func:`trusted_project_agent_spec`; this only says so,
+    so a repository's hooks never stop running unseen. Best-effort: a failed check
+    renders nothing rather than failing the turn.
+    """
+    project_dir = spec_project_dir(client)
+    if not project_dir:
+        return
+    try:
+        withheld = await asyncio.to_thread(withheld_project_spec_hooks, agent, project_dir)
+    except Exception:  # noqa: BLE001 - a notice must never fail a turn
+        logger.debug("could not check %r's project spec for withheld hooks", agent, exc_info=True)
+        return
+    if withheld:
+        append_and_surface(
+            state,
+            slot,
+            "notice",
+            _redact_display_text(_spec_withheld_hooks_notice(agent)),
+            "msg msg-info",
+        )
 
 
 def _redacted_hook_block(event: Any, pre_hook_results: Any) -> tuple[str, str]:

@@ -9856,6 +9856,36 @@ class TestReviewLaneVerdictVisibility:
         # The BLOCK it replaced is gone from the slot, not merged into it.
         assert "changes requested" not in patched
 
+    def test_a_named_validate_refusal_is_the_reason_a_no_report_run_gives(
+        self, tmp_path: Path
+    ) -> None:
+        # A candidate carrying a credential shape is refused in `validate`, so no
+        # leg runs and the fold reads `none`. The lane's reason -- the text the
+        # failing status names -- is then the refusal's own cause, not the generic
+        # "no leg reported" sentence and not "the scope harness is absent".
+        lane = self._scope_lane()
+        _calls, result = self._run_step(
+            lane,
+            tmp_path,
+            existing_body=None,
+            kind="incomplete",
+            extra_env={
+                "FOLDED": "none",
+                "ADJUDICATED": "false",
+                "VALIDATE_RESULT": "failure",
+                "ADJUDICATE_RESULT": "skipped",
+                "VALIDATE_REFUSAL": "corpus-credential",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr.decode()
+        lines = (tmp_path / "github-output.txt").read_text(encoding="utf-8").splitlines()
+        assert "verdict=UNKNOWN" in lines
+        why = next(line for line in lines if line.startswith("why="))
+        assert "carries a credential shape" in why, why
+        assert "harness is absent" not in why, why
+        assert "no leg reported" not in why, why
+
     def _fork_scope_lane(self) -> dict:
         return next(entry for entry in _GUARDED_LANES if entry["id"] == "fork-security-scope")
 
@@ -14730,6 +14760,107 @@ class TestScopeConclusionLadderLivesInOnePlace:
             "A code with no key regresses to the generic sentence; a key with no "
             "emitter is unreachable."
         )
+
+    def test_the_same_repo_lane_hands_the_validate_refusal_code_to_the_table(self) -> None:
+        # Same coupling as the fork lane's, on the lane that runs for a branch of
+        # this repository: a credential-shape refusal in `validate` names its cause
+        # as a job output, and the post step hands it to `conclude --refusal`. With
+        # no code the table can only answer the generic "no leg reported" sentence.
+        workflow = yaml.safe_load(_workflow(self.SAME_REPO))
+        outputs = workflow["jobs"]["validate"]["outputs"]
+        assert outputs["refusal"] == (
+            "${{ steps.probe.outputs.refusal || steps.validate.outputs.refusal }}"
+        )
+        post = _step_by_name(self.SAME_REPO, "publish", "Post the scope verdict")
+        assert post["env"]["VALIDATE_REFUSAL"] == "${{ needs.validate.outputs.refusal }}"
+        run = post["run"]
+        assert '--refusal "${VALIDATE_REFUSAL:-}"' in run
+        # Authored in the table, so no value of the code reaches the verdict text.
+        assert "corpus-credential" not in run
+        assert "corpus-uncheckable" not in run
+        emitted = set(
+            re.findall(
+                r'echo "refusal=(corpus-[a-z-]+)" >> "\$GITHUB_OUTPUT"',
+                _workflow(self.SAME_REPO),
+            )
+        )
+        keys = set(_scope_candidates()._VALIDATE_REFUSALS)
+        assert emitted == keys, (
+            "the refusal=corpus-* codes the same-repo lane emits and the "
+            f"_VALIDATE_REFUSALS keys have drifted: emitted={sorted(emitted)}, "
+            f"keys={sorted(keys)}."
+        )
+
+    def test_the_same_repo_fold_stages_the_harness_when_no_leg_reported(
+        self, tmp_path: Path
+    ) -> None:
+        # A run with no leg report -- a `validate` refusal, or the nothing-new short
+        # circuit -- is exactly the run whose conclusion the table has to name. The
+        # post step and the per-head floor run that table from the copy this step
+        # stages, so a fold that exits on "no report" before staging it leaves them
+        # reading "the scope harness is absent at both refs" over a harness that is
+        # committed at both. Run the REAL step bash against a repository that
+        # commits the harness, with no report on disk.
+        bash = _bash()
+        if bash is None or os.name == "nt":
+            pytest.skip("the fold step is exercised with Bash on POSIX runners")
+        repo = tmp_path / "repo"
+        (repo / "scripts").mkdir(parents=True)
+        for name in ("scope_candidates.py", "deny_diff.py"):
+            shutil.copyfile(ROOT / "scripts" / name, repo / "scripts" / name)
+        git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        gitconfig = tmp_path / "gitconfig"
+        gitconfig.touch()
+        git_env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+        git_env["GIT_CONFIG_NOSYSTEM"] = "1"
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=repo,
+                env=_child_env(git_env),
+            ).stdout.strip()
+
+        git("init", "-q")
+        git("add", "scripts")
+        git("commit", "-q", "-m", "harness")
+        sha = git("rev-parse", "HEAD")
+
+        step = _step_by_name(self.SAME_REPO, "publish", "Fold the per-platform reports")
+        script = tmp_path / "fold.sh"
+        script.write_text(str(step["run"]), encoding="utf-8")
+        harness = tmp_path / "scope-harness-publish"
+        output = tmp_path / "github-output.txt"
+        env = {
+            **git_env,
+            "BASE_SHA": sha,
+            "HEAD_SHA": sha,
+            "HARNESS": str(harness),
+            "REDACTOR": "",
+            "EXPECT_LEGS": "ubuntu-latest macos-latest windows-latest",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+        }
+        result = subprocess.run(
+            [bash, "-e", str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=repo,
+            env=_child_env(env),
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "folded=none" in output.read_text(encoding="utf-8").splitlines()
+        for name in ("scope_candidates.py", "deny_diff.py"):
+            staged = harness / name
+            assert staged.is_file(), f"{name} was not staged on a run with no leg report"
+            assert staged.read_bytes() == (repo / "scripts" / name).read_bytes(), name
 
     def test_a_floor_override_drops_the_refusal_remedy(self) -> None:
         # The floor can REPLACE the title with its own reason. A remedy that outlived

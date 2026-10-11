@@ -9895,6 +9895,13 @@
       "turn_4_assistant": "Ajoutée sous **Unreleased** :\n\n```md\n- correctif : une nouvelle tentative de rafraîchissement du jeton avant la déconnexion\n```\n\nJe la mets aussi dans la PR ?",
       "turn_4_user": "Oui. Puis résume ce qui a changé.",
       "turn_5_assistant": "Poussé. En bref : une nouvelle tentative autour du rafraîchissement du jeton, un test de régression pour la déconnexion et la ligne du CHANGELOG. La PR #12 contient les trois et est liée à #7."
+    },
+    "kiroSignInNotice": {
+      "sign_in_expired": "Connexion Kiro expirée",
+      "open_sign_in": "Se reconnecter dans les Paramètres",
+      "expired_detail": "Les agents ne peuvent pas s’exécuter tant que tu ne te reconnectes pas. La connexion enregistrée a expiré et ne peut pas être renouvelée.",
+      "refused_title": "Kiro a refusé de renouveler ta connexion",
+      "refused_detail": "Les agents s’arrêteront quand cette connexion expirera. Reconnecte-toi pour qu’ils continuent."
     }
   },
   "hooks": {

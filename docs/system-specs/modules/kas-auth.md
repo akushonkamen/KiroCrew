@@ -415,3 +415,24 @@ access token.
   than Kiro CLI, so a user who set up with one of those can switch agents later
   without turning on Developer Mode. `KasLoginGate` itself is still not mounted at the app
   root; the full-screen form stays available for that.
+- The persistent signal for a lapsed sign-in is the app-level **Kiro sign-in
+  notice** (`website/src/components/KiroSignInNotice.tsx`, mounted in `App.tsx`
+  above every route beside `CrashReportNotice`), because the card above lives on
+  a page nobody keeps open. It is a banner, not a top-bar control: the top bar's
+  action groups are at the two-control cap. It renders only while
+  `agent.acp_backend` is `kas`, a sign-in is stored, and the card's own verdict
+  (`signInLapsed` in `pages/developer/kiroSignInState.ts`, shared by both:
+  `!usable || refresh_rejected`) calls it lapsed; it is hidden on Settings >
+  Agent Harness itself, where the card shows the same state. An expiry with
+  nothing to renew it is a `role="status"` notice; a renewal Kiro refused is a
+  failed request, so it renders through `ErrorNotice` under its own title with
+  the agent hand-off. Both carry a "Sign in again in Settings" button, which
+  asks the page's leave guard and then deep-links to `KIRO_SIGN_IN_PATH`;
+  dismissing hides the notice for the current cause until the page reloads. A
+  failed config or status read renders through `ErrorNotice` with the agent
+  hand-off instead, since the sign-in then goes unchecked. It reads the same
+  token-free `GET /api/kas-login` status under the same `['kas-login']` query
+  key the card and flow use, polling once a minute only on a KAS gateway
+  (another backend never reads it), so the refusal marker the renewal tick
+  records shows on the next read and a new sign-in or a successful renewal
+  clears it.

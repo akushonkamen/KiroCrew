@@ -9764,6 +9764,13 @@
       "turn_4_assistant": "Unter **Unreleased** eingetragen:\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\nSoll er auch in den PR?",
       "turn_4_user": "Ja. Dann fasse zusammen, was sich geändert hat.",
       "turn_5_assistant": "Gepusht. Kurz: ein Wiederholungsversuch um die Token-Aktualisierung, ein Regressionstest für den Abmeldepfad und die CHANGELOG-Zeile. PR #12 enthält alle drei und ist mit #7 verknüpft."
+    },
+    "kiroSignInNotice": {
+      "sign_in_expired": "Kiro-Anmeldung abgelaufen",
+      "open_sign_in": "In den Einstellungen erneut anmelden",
+      "expired_detail": "Agenten können erst wieder laufen, wenn du dich erneut anmeldest. Die gespeicherte Anmeldung ist abgelaufen und kann nicht erneuert werden.",
+      "refused_title": "Kiro hat die Erneuerung deiner Anmeldung abgelehnt",
+      "refused_detail": "Agenten hören auf zu laufen, sobald diese Anmeldung abläuft. Melde dich erneut an, damit sie weiterlaufen."
     }
   },
   "hooks": {

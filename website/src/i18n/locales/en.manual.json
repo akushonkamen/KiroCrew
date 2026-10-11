@@ -4164,6 +4164,13 @@
       "turn_4_assistant": "Added under **Unreleased**:\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\nWant it in the PR too?",
       "turn_4_user": "Yes. Then summarize what changed.",
       "turn_5_assistant": "Pushed. In short: one retry around the token refresh, a regression test for the sign-out path, and the CHANGELOG line. PR #12 has all three and is linked to #7."
+    },
+    "kiroSignInNotice": {
+      "sign_in_expired": "Kiro sign-in expired",
+      "open_sign_in": "Sign in again in Settings",
+      "expired_detail": "Agents cannot run until you sign in again. The stored sign-in expired and cannot be renewed.",
+      "refused_title": "Kiro refused to renew your sign-in",
+      "refused_detail": "Agents will stop when this sign-in expires. Sign in again to keep them running."
     }
   },
   "hooks": {

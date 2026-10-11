@@ -9895,6 +9895,13 @@
       "turn_4_assistant": "Añadida bajo **Unreleased**:\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\n¿La incluyo también en el PR?",
       "turn_4_user": "Sí. Luego resume qué cambió.",
       "turn_5_assistant": "Enviado. En resumen: un reintento alrededor de la renovación del token, una prueba de regresión para el cierre de sesión y la línea del CHANGELOG. El PR #12 tiene las tres cosas y está enlazado a #7."
+    },
+    "kiroSignInNotice": {
+      "sign_in_expired": "Inicio de sesión en Kiro caducado",
+      "open_sign_in": "Volver a iniciar sesión en Configuración",
+      "expired_detail": "Los agentes no pueden ejecutarse hasta que vuelvas a iniciar sesión. El inicio de sesión guardado caducó y no se puede renovar.",
+      "refused_title": "Kiro rechazó renovar tu inicio de sesión",
+      "refused_detail": "Los agentes dejarán de ejecutarse cuando caduque este inicio de sesión. Vuelve a iniciar sesión para que sigan ejecutándose."
     }
   },
   "hooks": {

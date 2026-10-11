@@ -9895,6 +9895,13 @@
       "turn_4_assistant": "Adicionada em **Unreleased**:\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\nQuer no PR também?",
       "turn_4_user": "Sim. Depois resuma o que mudou.",
       "turn_5_assistant": "Enviado. Em resumo: uma nova tentativa na renovação do token, um teste de regressão para o caminho de saída e a linha do CHANGELOG. O PR #12 tem os três e está vinculado à #7."
+    },
+    "kiroSignInNotice": {
+      "sign_in_expired": "Login do Kiro expirado",
+      "open_sign_in": "Entrar novamente nas Configurações",
+      "expired_detail": "Os agentes não podem ser executados até você entrar novamente. O login salvo expirou e não pode ser renovado.",
+      "refused_title": "O Kiro recusou renovar seu login",
+      "refused_detail": "Os agentes param de ser executados quando este login expirar. Entre novamente para mantê-los em execução."
     }
   },
   "hooks": {

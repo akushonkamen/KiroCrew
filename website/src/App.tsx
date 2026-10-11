@@ -163,6 +163,10 @@ const UpdateFoundModal = lazy(() => import('./components/UpdateFoundModal'))
 // Same boundary, same reason: the pill renders nothing without an update,
 // so its code rides the on-demand chunk instead of the app core.
 const UpdatePill = lazy(() => import('./components/UpdatePill'))
+// Lazy for the same budget: it decides its own visibility (KAS backend + a
+// lapsed stored sign-in), so it is always mounted and its chunk is fetched once
+// at boot; it renders nothing in the common case.
+const KiroSignInNotice = lazy(() => import('./components/KiroSignInNotice'))
 
 // Route-level code splitting for the App Store split (PR1): Discover and
 // Library are independent surfaces, and neither belongs in the app-core
@@ -2752,6 +2756,14 @@ export default function App() {
               the app, not of the page, and the launch after a crash rarely lands
               on the page the user was on when it happened. */}
           <CrashReportNotice />
+          {/* Route-independent for the same reason: a lapsed Kiro sign-in
+              stops every KAS agent, whatever page is open. It hides itself
+              off KAS, while the sign-in works, and on the page with the card. */}
+          <ErrorBoundary scope="kiro-sign-in-notice" fallback={null}>
+            <Suspense fallback={null}>
+              <KiroSignInNotice />
+            </Suspense>
+          </ErrorBoundary>
           {/* The rail renderer reaches the chat page through context rather than
               a prop: the route element is shared with the popout/embed frames. */}
           <MobileNavRailContext.Provider value={mobileNavRail}>

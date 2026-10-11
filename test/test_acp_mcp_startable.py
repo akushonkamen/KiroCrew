@@ -52,19 +52,27 @@ def test_an_absolute_file_without_the_execute_bit_is_unstartable(tmp_path):
 
 
 def test_a_bare_name_on_no_path_is_unstartable(monkeypatch):
-    monkeypatch.setattr("kiro_crew.acp.mcp_startable.augmented_path", lambda _base: "")
+    monkeypatch.setattr("kiro_crew.acp.mcp_startable.mcp_search_path", lambda _base: "")
     reason = unstartable_reason(_stdio("bad", "no-such-mcp-server-g19"))
     assert reason == "command not found on PATH: no-such-mcp-server-g19"
 
 
 def test_a_bare_name_on_the_elements_own_path_is_startable(tmp_path, monkeypatch):
-    monkeypatch.setattr("kiro_crew.acp.mcp_startable.augmented_path", lambda _base: "")
+    # The element's PATH reaches the shared MCP search path, which is what resolves it.
+    searched: list[str] = []
+
+    def _search(declared):
+        searched.append(declared)
+        return declared
+
+    monkeypatch.setattr("kiro_crew.acp.mcp_startable.mcp_search_path", _search)
     name = "g19-server.exe" if sys.platform == "win32" else "g19-server"
     exe = tmp_path / name
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
-    element = _stdio("ok", name, env=[{"name": "PATH", "value": str(tmp_path)}])
+    element = _stdio("ok", name, env=[{"name": "Path", "value": str(tmp_path)}])
     assert unstartable_reason(element) == ""
+    assert searched == [str(tmp_path)]
 
 
 def test_a_relative_path_and_a_remote_element_are_kept():
@@ -189,6 +197,9 @@ def test_every_array_build_is_pruned_before_its_roster_handoff():
     assert len(prunes) == 3
     for prune, handoff in zip(prunes, handoffs):
         assert prune < handoff
+        assert (
+            lines[prune - 1].strip() == "if self.backend in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:"
+        ), f"a prune is awaited on every backend's path (H13): {lines[prune]!r}"
         target = lines[prune].split("=", 1)[0].strip()
         assert target.endswith('["mcpServers"]'), lines[prune]
         params = target.split("[", 1)[0]

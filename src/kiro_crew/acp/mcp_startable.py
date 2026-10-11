@@ -13,9 +13,11 @@ says so to the user:
 Crew can answer the most common cause -- a command that does not exist -- before the
 request is sent: leave the element out, and say which server it was. The claim is
 deliberately narrow. Only a command that is CERTAINLY absent is pruned: an absolute
-path that is not an executable file, or a bare name found on neither the harness's
-search path nor the element's own ``PATH``. A relative path with a directory part is
-resolved by the harness against a directory this module does not know, so it is kept.
+path that names no executable, or a bare name not found on the MCP search path
+(:func:`kiro_crew.env.mcp_search_path` over the element's own ``PATH``, the path the
+dashboard probe and the gateway rewriter resolve the same command against). A relative
+path with a directory part is resolved by the harness against a directory this module
+does not know, so it is kept.
 A command that exists but exits at once is not caught here either; it reaches the
 harness exactly as before.
 
@@ -29,7 +31,7 @@ import os
 import shutil
 from typing import Any, Mapping, NamedTuple, Sequence
 
-from kiro_crew.env import augmented_path
+from kiro_crew.env import mcp_search_path
 
 
 class PrunedServer(NamedTuple):
@@ -45,7 +47,8 @@ def _element_path(element: Mapping[str, Any]) -> str:
     if not isinstance(env, list):
         return ""
     for pair in env:
-        if isinstance(pair, Mapping) and pair.get("name") == "PATH":
+        # Case-insensitive: a Windows-authored spec says ``Path``.
+        if isinstance(pair, Mapping) and str(pair.get("name") or "").upper() == "PATH":
             value = pair.get("value")
             return value if isinstance(value, str) else ""
     return ""
@@ -64,16 +67,15 @@ def unstartable_reason(element: Any) -> str:
     if not isinstance(command, str) or not command:
         return ""
     if os.path.isabs(command):
-        if os.path.isfile(command) and os.access(command, os.X_OK):
+        # ``which`` checks the one location an absolute command names, applying
+        # ``PATHEXT`` on Windows, so a command written without ``.exe`` is found.
+        if shutil.which(command):
             return ""
         return f"command not found: {command}"
     if os.sep in command or (os.altsep and os.altsep in command):
         return ""
-    # The harness is spawned with this augmented PATH (``acp.launch``), and the
-    # child may be handed its own. Found on either, it may start.
-    for search in (augmented_path(os.environ.get("PATH", "")), _element_path(element)):
-        if search and shutil.which(command, path=search):
-            return ""
+    if shutil.which(command, path=mcp_search_path(_element_path(element))):
+        return ""
     return f"command not found on PATH: {command}"
 
 

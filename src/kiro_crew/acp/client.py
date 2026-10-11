@@ -7009,7 +7009,8 @@ class AcpClient:
                 *(await asyncio.to_thread(self._pooled_mcp_servers)),
             ],
         }
-        new_params["mcpServers"] = await self._prune_unstartable_mcp(new_params["mcpServers"])
+        if self.backend in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:
+            new_params["mcpServers"] = await self._prune_unstartable_mcp(new_params["mcpServers"])
         if self._is_claude:
             new_params["_meta"] = self._claude_session_meta()
 
@@ -7077,7 +7078,10 @@ class AcpClient:
                 *(self._goose_session_mcp_servers() if self._is_goose else []),
                 *(await asyncio.to_thread(self._pooled_mcp_servers)),
             ]
-            new_params["mcpServers"] = await self._prune_unstartable_mcp(new_params["mcpServers"])
+            if self.backend in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:
+                new_params["mcpServers"] = await self._prune_unstartable_mcp(
+                    new_params["mcpServers"]
+                )
             # Rebuilt AFTER the array, from the same re-seed: the envelope carries
             # the setting sources the array was authorized under and the inline
             # settings naming the substitute model.
@@ -7232,9 +7236,10 @@ class AcpClient:
                             *(await asyncio.to_thread(self._pooled_mcp_servers)),
                         ],
                     }
-                    load_params["mcpServers"] = await self._prune_unstartable_mcp(
-                        load_params["mcpServers"]
-                    )
+                    if self.backend in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:
+                        load_params["mcpServers"] = await self._prune_unstartable_mcp(
+                            load_params["mcpServers"]
+                        )
                     if self._is_claude:
                         load_params["_meta"] = self._claude_session_meta()
                     elif self.backend not in ACP_BACKENDS_HARNESS_OWNED_SESSIONS:
@@ -8396,15 +8401,12 @@ class AcpClient:
 
         Only for ``ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP``, where such an element is
         otherwise lost without a word (goose) or takes the whole session with it
-        (deepseek). The set check comes first and returns the list untouched, so the
-        kiro path gains no scheduling point (harness-parity H13). The stats run off
-        the loop. Each pruned server is warned about here and recorded on the MCP
-        report as failed by :meth:`_begin_session_report`, which every array build
-        reaches before its request is sent.
+        (deepseek). Each call site checks that set BEFORE awaiting this, so the kiro
+        path gains no awaited step (harness-parity H13). The stats run off the loop.
+        Each pruned server is warned about here and recorded on the MCP report as
+        failed by :meth:`_begin_session_report`, which every array build reaches
+        before its request is sent.
         """
-        self._mcp_pruned = ()
-        if self.backend not in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:
-            return servers
         kept, pruned = await asyncio.to_thread(prune_unstartable, servers)
         for server in pruned:
             logger.warning(

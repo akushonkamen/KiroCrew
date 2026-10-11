@@ -183,11 +183,59 @@ async def test_concurrent_clicks_open_one_slot(chat, _hermetic) -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_finish_time_restamped_after_cleanup_keeps_the_one_slot(chat, _hermetic) -> None:
+    run = _run()
+    state = _state(run)
+    from_notification = await _post(state)
+    await _drain(state)
+    run.finished_at = 205.0
+    after_cleanup = await _post(state)
+    await _drain(state)
+    assert after_cleanup == from_notification
+    assert len(state._slots) == 1
+    assert _summaries(state._slots[from_notification]) == 1
+    assert chat.await_count == 1
+    assert _hermetic.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_click_on_the_outcome_after_a_click_mid_run_opens_the_outcome_chat(chat) -> None:
+    run = _run(status="running")
+    run.finished_at = 0.0
+    run.tasks[0].status = StepStatus.IN_PROGRESS
+    state = _state(run)
+    mid_run = await _post(state)
+    await _drain(state)
+    run.status, run.finished_at = "failed", 200.0
+    run.tasks[0].status, run.tasks[0].error = StepStatus.FAILED, "boom"
+    outcome = await _post(state)
+    await _drain(state)
+    assert outcome != mid_run
+    assert "diagnose the root cause" in state._slots[outcome].messages[0][1]
+    assert chat.await_count == 2
+    run.finished_at = 205.0
+    assert await _post(state) == outcome
+    assert chat.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_settling_during_cleanup_keeps_the_one_slot(chat) -> None:
+    run = _run(status="cancelling")
+    state = _state(run)
+    during_cleanup = await _post(state)
+    run.status, run.finished_at = "cancelled", 205.0
+    after_cleanup = await _post(state)
+    await _drain(state)
+    assert after_cleanup == during_cleanup
+    assert chat.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_a_retry_completion_opens_a_new_slot(chat) -> None:
     run = _run()
     state = _state(run)
     first = await _post(state)
-    run.started_at, run.finished_at = 300.0, 400.0
+    run.started_at = 300.0
     second = await _post(state)
     await _drain(state)
     assert second != first
@@ -230,7 +278,9 @@ async def test_a_run_without_an_execution_context_is_idempotent_too(chat, _herme
     assert _summaries(state._slots[first]) == 1
     assert chat.await_count == 1
     _hermetic.assert_not_called()
-    run.started_at, run.finished_at = 300.0, 400.0
+    run.finished_at = 205.0
+    assert await _post(state) == "chat-1"
+    run.started_at = 300.0
     assert await _post(state) == "chat-2"
     await _drain(state)
 

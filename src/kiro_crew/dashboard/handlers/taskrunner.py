@@ -63,9 +63,22 @@ _RESULT_SLOTS_ATTR = "_task_result_slots"
 _RESULT_SLOTS_MAX = 512
 
 
-def _completion_identity(run, branch: str) -> tuple[str, float, float, str]:
-    """One run attempt's completion: a retry stamps new start and finish times."""
-    return (run.task_id, run.started_at, run.finished_at, branch)
+#: Statuses a run passes through on its way to the one it settles on during cleanup.
+_SETTLING_STATUS = {"cancelling": "cancelled", "pausing": "paused"}
+
+
+def _completion_identity(run, branch: str) -> tuple[str, float, str, str]:
+    """One run attempt in one state: executing, resuming and retrying each stamp a new start.
+
+    The status separates a click while the run is still going from a click on its
+    outcome, so the outcome's results and prompt reach a chat of their own. A
+    status the run settles out of during cleanup counts as the one it settles on.
+    The finish time is not part of it: the runner announces a completion and then
+    stamps the finish time again once its sessions are cleaned up, so a click on
+    either side of that cleanup is still the same attempt.
+    """
+    status = _SETTLING_STATUS.get(run.status, run.status)
+    return (run.task_id, run.started_at, status, branch)
 
 
 async def _open_result_slot(state: DashboardState, task_id: str, execution):
@@ -92,11 +105,12 @@ async def _open_result_slot(state: DashboardState, task_id: str, execution):
 async def _task_result_slot(request: web.Request, state: DashboardState, task_id: str, branch: str):
     """The chat slot continuing one completion of *task_id*, and whether it is new.
 
-    A completion (the run's start and finish times) opens one slot per *branch*,
-    ``plan`` or ``review``. While that slot is open every call returns it with
-    ``False``, so a repeated click lands on the conversation already working in the
-    run's directory instead of starting a second agent there. A retry's new times
-    open a new slot, and so does a call after the slot was closed.
+    A run attempt in one state (the run's start time and status) opens one slot per
+    *branch*, ``plan`` or ``review``. While that slot is open every call returns it
+    with ``False``, so a repeated click lands on the conversation already working in
+    the run's directory instead of starting a second agent there. A retry's or a
+    resume's new start time opens a new slot, as does the run reaching its outcome
+    after a click while it was going, and a call after the slot was closed.
     """
     run = state.task_runner._runs.get(task_id) if state.task_runner else None
     if run is None:

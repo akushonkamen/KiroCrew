@@ -1411,12 +1411,16 @@ def is_denied(
             continue
         # The mint predicate also gets the command AS SUBMITTED: it decodes base64
         # literals to read the name they hide, and base64 does not survive the
-        # lower-casing every other predicate reads.
-        hit = (
-            _argv._is_credential_mint(lower, raw_text=tool_name)
-            if predicate is _argv._is_credential_mint
-            else predicate(lower)
-        )
+        # lower-casing every other predicate reads.  The ssh-self predicate also
+        # takes the raw command: it reads the ORIGINAL-case option letters of an
+        # xargs launcher (``-I`` required-arg vs ``-i`` optional) that the lower
+        # fold would merge, while still matching hosts on the lowered text.
+        if predicate is _argv._is_credential_mint:
+            hit = _argv._is_credential_mint(lower, raw_text=tool_name)
+        elif predicate is _argv._is_ssh_to_self:
+            hit = _argv._is_ssh_to_self(lower, raw_text=tool_name)
+        else:
+            hit = predicate(lower)
         if hit:
             # Report the rule's own pattern, exactly as the regex tier does, so
             # the denial reason and the SEL event still map back to the rule id —
@@ -2600,7 +2604,7 @@ _EXPORTS: dict[str, str] = {
     "_PUSH_REPO_OPTS": "argv_floor",
     "_PUSH_VALUE_OPTS": "argv_floor",
     "_PUSH_VALUE_SHORTS": "argv_floor",
-    "_QUOTED_SEP_SENTINELS": "argv_floor",
+    "_QUOTED_SEP_SENTINELS": "shell_normalizer",
     "_RAW_ASSIGNMENT_RE": "argv_floor",
     "_RSYNC_RSH_ASSIGN_RE": "argv_floor",
     "_SELF_CLOUD_DESTRUCTIVE_VERBS": "argv_floor",
@@ -2635,7 +2639,7 @@ _EXPORTS: dict[str, str] = {
     "_is_self_update": "argv_floor",
     "_is_ssh_to_self": "argv_floor",
     "_kill_prefix_keeps_anchor": "argv_floor",
-    "_mask_quoted_separators": "argv_floor",
+    "_mask_quoted_separators": "shell_normalizer",
     "_matches_self_subcommand": "argv_floor",
     "_normalize_ref": "argv_floor",
     "_operand_targets_self": "argv_floor",
@@ -2659,7 +2663,7 @@ _EXPORTS: dict[str, str] = {
     "_shell_payload_sources": "argv_floor",
     "_ssh_family_verb": "argv_floor",
     "_static_substitution_output": "argv_floor",
-    "_unmask_separators": "argv_floor",
+    "_unmask_separators": "shell_normalizer",
     # denied_rules
     "BUILTIN_DENIED_RULES": "denied_rules",
     "BUILTIN_DENY_PATTERNS": "denied_rules",
@@ -3184,7 +3188,6 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _PUSH_REPO_OPTS,
         _PUSH_VALUE_OPTS,
         _PUSH_VALUE_SHORTS,
-        _QUOTED_SEP_SENTINELS,
         _RAW_ASSIGNMENT_RE,
         _RSYNC_RSH_ASSIGN_RE,
         _SELF_CLOUD_DESTRUCTIVE_VERBS,
@@ -3218,7 +3221,6 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _is_self_update,
         _is_ssh_to_self,
         _kill_prefix_keeps_anchor,
-        _mask_quoted_separators,
         _matches_self_subcommand,
         _normalize_ref,
         _operand_targets_self,
@@ -3243,7 +3245,6 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _shell_payload_sources,
         _ssh_family_verb,
         _static_substitution_output,
-        _unmask_separators,
     )
     from kiro_crew.security.denied_rules import (  # noqa: F401
         _AWS_SECRET_VAR_NAMES,
@@ -3561,6 +3562,7 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _PYTHON_INLINE_PROGRAM_FLAGS,
         _PYTHON_OPERAND_FLAGS,
         _PYTHON_PROGRAM_RE,
+        _QUOTED_SEP_SENTINELS,
         _REDIRECT_START_RE,
         _SCRIPT_EXECUTES_RE,
         _SHELL_ACTIVE_CHARS,
@@ -3604,6 +3606,7 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _is_shell_command_flag,
         _is_shell_variable_reference,
         _iter_shell_chars,
+        _mask_quoted_separators,
         _matching_close_paren,
         _mint_verb_in_substitution,
         _nested_shell_payloads,
@@ -3644,6 +3647,7 @@ if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
         _substitution_bodies,
         _substitution_depth_delta,
         _substitution_program,
+        _unmask_separators,
         _xargs_reconstructed_command,
         normalize_shell_command,
     )

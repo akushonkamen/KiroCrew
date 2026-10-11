@@ -19,6 +19,7 @@ tiers depend on the reader, never the reverse.
 from __future__ import annotations
 
 import bisect
+import fnmatch
 import os
 import re
 import shlex
@@ -169,6 +170,35 @@ def _program_basename(token: str) -> str:
     if segments:
         token = segments[-1]
     return os.path.basename(token.rstrip("/"))
+
+
+# Glob metacharacters whose presence in a program basename means the shell can
+# expand it to another name before exec; a basename holding one is tested for
+# expandability rather than compared literally -- an over-approximation toward
+# deny.
+_GLOB_CHARS: frozenset[str] = frozenset("*?[")
+
+#: The ssh-family connection verbs the self-target floor recognises.
+_SSH_FAMILY_VERBS: frozenset[str] = frozenset({"ssh", "scp", "sftp", "rsync"})
+
+
+def _ssh_family_verb(token: str) -> "str | None":
+    """The ssh-family verb *token* invokes, or None.
+
+    Path-qualified (``/usr/bin/ssh``) and Windows (``ssh.exe``) spellings
+    resolve to the bare verb.  A glob basename that CAN expand to one
+    (``s?h``, see ``_GLOB_CHARS``) resolves to the verb it can name.
+    """
+    base = _program_basename(_strip_redirect(token.strip("\"'")))
+    if base.endswith(".exe"):
+        base = base[: -len(".exe")]
+    if base in _SSH_FAMILY_VERBS:
+        return base
+    if _GLOB_CHARS.intersection(base):
+        for verb in _SSH_FAMILY_VERBS:
+            if fnmatch.fnmatchcase(verb, base) or fnmatch.fnmatchcase(verb + ".exe", base):
+                return verb
+    return None
 
 
 def _glob_could_expand_to(base: str, names: "tuple[str, ...] | frozenset[str]") -> bool:
@@ -404,7 +434,7 @@ def _glob_to_regex(pattern: str, depth: int = 0, budget: "list[int] | None" = No
 
 # Programs whose ``-c`` argument is a shell script: its text is a COMMAND, so a
 # self-protection check has to look inside it rather than treat it as an operand.
-_NESTED_SHELL_PROGRAMS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "busybox"})
+_NESTED_SHELL_PROGRAMS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "busybox"})
 
 
 # Any of these in the ORIGINAL command text means the shell can rewrite a word
@@ -1768,78 +1798,473 @@ def _heredoc_marker(raw: str) -> "str | None":
     return raw[3:] if raw.startswith("<<-") else raw[2:]
 
 
+#: xargs short options whose argument is REQUIRED: it is taken ATTACHED
+#: (``-Ifoo``) or, if the letter ends the token, from the NEXT word (``-I foo``)
+#: -- getopt consumes that next word even when it begins with ``-``.  ``I``/``J``
+#: set the replacement string (GNU ``-I``, BSD ``-J``); the rest consume a value
+#: that is never a replstr (GNU ``-L``/``-n``/``-P``/``-s``/``-E``/``-d``/``-a``;
+#: BSD ``-R`` max-replacements and ``-S`` replsize).  Read case-sensitively, so a
+#: bundle must carry the real-case letters (the floor lowercases for host
+#: matching, so the parse reads the ORIGINAL-case tokens when it has them).
+_XARGS_REQUIRED_ARG_LETTERS = frozenset("IJLnPsEdaRS")
+#: xargs short options whose argument is OPTIONAL: taken ONLY when ATTACHED
+#: (``-ifoo``), so a lone ``-i``/``-e``/``-l`` NEVER consumes the next word.
+#: ``i`` sets the replstr (default ``{}``); ``l`` is a count option; ``e`` is neither.
+_XARGS_OPTIONAL_ARG_LETTERS = frozenset("iel")
+
+
+#: Sentinel bytes standing in for an ``_ends_argv`` boundary character that was
+#: QUOTED or backslash-escaped in the raw source, so it is literal DATA rather
+#: than a command separator.  shlex resolves quotes before the ssh-self operand
+#: walk runs, so by token time a quoted ``a;b`` is indistinguishable from a
+#: glued unquoted operator ``a;b`` -- yet the first is one operand and the
+#: second is a command boundary.  The distinguishing information exists only in
+#: the SOURCE, so the raw text is scanned there and every data separator is
+#: rewritten to a sentinel ``_ends_argv`` does not treat as a boundary.  The
+#: table covers EVERY ``_ends_argv`` boundary char (``;`` ``|`` ``&`` newline
+#: ``#`` ``(`` ``{``); a subset would let a quoted spelling of the missing one
+#: hide a self-host operand behind a fake boundary.  Control bytes are used
+#: because a real shell command never contains them.
+_QUOTED_SEP_SENTINELS = {
+    ";": "\x00",
+    "|": "\x01",
+    "&": "\x02",
+    "\n": "\x03",
+    "#": "\x04",
+    "(": "\x05",
+    "{": "\x06",
+}
+
+
+def _mask_quoted_separators(text: str) -> str:
+    """Rewrite quoted/escaped ``_ends_argv`` boundary chars in *text* to sentinels.
+
+    Single-pass quote-state scan over the RAW source:
+
+    * inside single quotes -- boundary chars are literal data, so they become
+      sentinels; a single quote takes no escapes, so a backslash inside is an
+      ordinary character.
+    * inside double quotes -- boundary chars are literal data, so they become
+      sentinels; a backslash does not change a separator's literalness, so each
+      character is handled on its own.
+    * outside quotes -- a backslash escapes the next character, so an escaped
+      boundary char is data and becomes a sentinel (the backslash is kept so
+      shlex still de-escapes downstream, and an escaped quote never opens a
+      context); the one exception is backslash-newline, a line continuation,
+      handled at the escape branch.
+    * every other character is copied verbatim; an unterminated quote leaves the
+      rest of the string quoted, matching how bash reads it.
+
+    Idempotent for this floor's purposes: a sentinel byte already present in
+    hostile input is left in place, and ``_unmask_separators`` later turns it
+    into a real separator -- which only ends the walk EARLIER, widening the deny
+    (the safe direction).  The mask feeds shlex tokenization and recursive floor
+    calls, both of which discard quotes anyway, so it never changes the resolved
+    tokens beyond neutralizing the boundary ambiguity it exists to close.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote is None:
+            if ch == "\\" and i + 1 < n:
+                # Escaped char: an escaped separator is data (mask it); keep the
+                # backslash so shlex de-escapes downstream, and consume the next
+                # char here so an escaped quote never opens a quote context.
+                # EXCEPTION: backslash-newline is a LINE CONTINUATION -- bash
+                # (and posix shlex) glue the surrounding text into one token
+                # (``local\<newline>host`` resolves to ``localhost``), so it is
+                # neither data nor a separator; masking it would corrupt the
+                # glued token and un-match a continued self-host spelling.
+                nxt = text[i + 1]
+                out.append(ch)
+                if nxt == "\n":
+                    out.append(nxt)
+                else:
+                    out.append(_QUOTED_SEP_SENTINELS.get(nxt, nxt))
+                i += 2
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+            out.append(ch)
+        elif quote == '"' and ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
+            # Inside DOUBLE quotes bash honors ``\`` only before ``"  \  $  ` ``
+            # (round-8): ``\"`` is a literal quote, NOT a close.  Copy both bytes
+            # verbatim and skip the next char so the escaped quote never ends the
+            # quote context -- otherwise ``scp "a\";b" localhost:/x`` would exit
+            # the quote at ``\"`` and read the following ``;`` as a real
+            # separator, ending the operand walk before the self-host target.
+            # Single quotes honor no escape, so this is scoped to ``"``.
+            out.append(ch)
+            out.append(text[i + 1])
+            i += 2
+            continue
+        elif ch == quote:
+            quote = None
+            out.append(ch)
+        else:
+            # Inside a quote: a separator is literal data; everything else
+            # (backslash included) is copied verbatim.
+            out.append(_QUOTED_SEP_SENTINELS.get(ch, ch))
+        i += 1
+    return "".join(out)
+
+
+def _unmask_separators(text: str) -> str:
+    """Reverse :func:`_mask_quoted_separators` -- restore the boundary chars."""
+    for sep, sentinel in _QUOTED_SEP_SENTINELS.items():
+        text = text.replace(sentinel, sep)
+    return text
+
+
+#: Returned by :func:`_xargs_here_string_rebuild` when the option run's letter
+#: case is unknown (no aligned original-case tokens) and it carries a letter
+#: whose two cases mean different things to xargs (``-I``/``-i``, ``-J``,
+#: ``-L``/``-l``, ``-E``/``-e``, ``-P``/``-p``, ``-R``/``-r``): the argv xargs
+#: runs cannot be known, so the caller fails closed.
+_XARGS_CASE_UNKNOWN = "\x00xargs-case-unknown"
+_XARGS_CASE_FOLDED_LETTERS = frozenset("ijlepr")
+#: Most distinct original-case spellings :func:`_raw_case_spellings` returns.
+_RAW_SPELLINGS_MAX = 4
+
+
+def _raw_case_spellings(value: str, raw_text: "str | None") -> "list[str]":
+    """The original-case spellings of the lowered *value* inside *raw_text*.
+
+    A derived value (an option value, a nested shell body) is cut from the
+    LOWERED text, so its letter case is gone, yet the same characters still
+    sit in the original-case *raw_text*.  Every distinct spelling is returned,
+    so a decoy spelled in another case is judged alongside the real one.  An
+    empty list means the case is unknown: the value is not there verbatim, or
+    it is there in more spellings than the cap.
+    """
+    if not raw_text or not value:
+        return []
+    raw_lower = raw_text.lower()
+    if len(raw_lower) != len(raw_text):
+        return []
+    found: "list[str]" = []
+    at = raw_lower.find(value)
+    while at != -1:
+        spelled = raw_text[at : at + len(value)]
+        if spelled not in found:
+            if len(found) == _RAW_SPELLINGS_MAX:
+                return []
+            found.append(spelled)
+        at = raw_lower.find(value, at + 1)
+    return found
+
+
+def _xargs_batch_count_is_one(value: str) -> bool:
+    """True if an xargs ``-n``/``--max-args`` value is 1.
+
+    GNU xargs parses the count NUMERICALLY, so ``-n1``, ``-n01`` and ``-n+1``
+    are all 1 (the value at which ``-n`` leaves an ``-I`` replace mode in place
+    rather than cancelling it).  A non-numeric value is not 1 (and is a
+    malformed count GNU would reject), so it fails toward cancelling -- the
+    deny-leaning direction, which also appends the stdin word when the
+    replacement string is absent from the args.
+    """
+    try:
+        return int(value, 10) == 1
+    except (ValueError, TypeError):
+        return False
+
+
+def _xargs_replacement_string(opt_tokens: "list[str]") -> "tuple[str | None, bool, bool, bool]":
+    """The single replacement string GNU/BSD xargs resolves from its options.
+
+    *opt_tokens* are the words BETWEEN the ``xargs`` launcher and the utility it
+    runs, in ORIGINAL case (the letter case is load-bearing: ``-I`` takes a
+    REQUIRED argument, ``-i`` an OPTIONAL one taken only when attached).  Parsed
+    exactly as ``getopt`` does -- short options bundle (``-rI STR``, ``-0rI%``),
+    ``--`` ends options, a long option takes ``=value`` or, when its argument is
+    required, the next word -- and the LAST replace option wins (``-i -Ihost``
+    -> ``host``), mirroring xargs's own last-wins semantics.
+
+    A count option (``-n``/``--max-args`` with N != 1, ``-L``/``-l``/
+    ``--max-lines`` at any count) never drops an explicit replace option from
+    the result, because the two xargs families disagree on it: GNU xargs lets
+    the later of the two win and then APPENDS the stdin word, while BSD xargs
+    keeps ``-I`` replace mode under every count and SUBSTITUTES it.  A count
+    option after a GNU replace option therefore marks the result so the caller
+    builds BOTH argvs -- BSD's substituted one and GNU's appended one -- each of
+    which a supported platform really runs.
+
+    Returns ``(replstr, parseable, bsd_append, count_after_replace)``.
+    ``replstr`` is the resolved replacement string, or ``None`` when NO replace
+    option appeared.  ``parseable`` is ``False`` when a required-argument
+    option is missing its value -- the caller fails closed on that.
+    ``bsd_append`` is ``True`` when the winning replace option is BSD ``-J``,
+    which APPENDS the stdin word when no argument EQUALS its replstr
+    (BSD keeps ``-J`` under a count option, and GNU has no ``-J``).
+    ``count_after_replace`` is ``True`` when a count option follows the winning
+    ``-I``/``-i``/``--replace``; a GNU replace option with no count option after
+    it runs the command UNCHANGED when the marker is missing.
+    """
+    #: long options whose argument is REQUIRED (so a ``--opt value`` with no
+    #: ``=`` consumes the next word).  ``--replace`` (optional) and
+    #: ``--max-lines`` (GNU: OPTIONAL argument) are NOT here -- a lone
+    #: ``--max-lines`` does not consume the next word.
+    required_long = (
+        "max-args",
+        "max-chars",
+        "max-procs",
+        "arg-file",
+        "delimiter",
+        "process-slot-var",
+    )
+    replstr: "str | None" = None
+    bsd_append = False
+    count_after_replace = False
+    i = 0
+    n = len(opt_tokens)
+    while i < n:
+        tok = opt_tokens[i].strip("\"'")
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            name, sep, val = tok.partition("=")
+            long = name[2:]
+            is_maxargs = (
+                bool(long) and "max-args".startswith(long) and not "max-lines".startswith(long)
+            )
+            is_maxlines = (
+                bool(long) and "max-lines".startswith(long) and not "max-args".startswith(long)
+            )
+            if long and "replace".startswith(long):
+                # ``--replace`` (optional arg): ``=value`` or the default ``{}``.
+                replstr = val if sep else "{}"
+                bsd_append = count_after_replace = False
+            elif is_maxlines:
+                # ``--max-lines`` (optional, ``=value`` only) is a count option
+                # at ANY count, ``=1`` and a lone ``--max-lines`` included,
+                # exactly as short ``-L``/``-l`` are.
+                count_after_replace = True
+            elif is_maxargs:
+                # ``--max-args`` (required arg) is a count option unless its
+                # count is 1, the same as short ``-n``.
+                if sep:
+                    bvalue = val
+                elif i + 1 < n:
+                    bvalue = opt_tokens[i + 1].strip("\"'")
+                    i += 1
+                else:
+                    bvalue = ""
+                if bvalue and not _xargs_batch_count_is_one(bvalue):
+                    count_after_replace = True
+            elif not sep and any(opt.startswith(long) for opt in required_long if long):
+                # A required-argument long option with no ``=`` takes the next
+                # word -- step over it so it is not misread as the utility.
+                i += 1
+            i += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            bundle = tok[1:]
+            consumed_next = False
+            j = 0
+            while j < len(bundle):
+                c = bundle[j]
+                attached = bundle[j + 1 :]
+                if c in _XARGS_REQUIRED_ARG_LETTERS:
+                    if attached:
+                        value = attached
+                    elif i + 1 < n:
+                        value = opt_tokens[i + 1].strip("\"'")
+                        consumed_next = True
+                    else:
+                        # Required argument with nothing to take it: malformed.
+                        return None, False, False, False
+                    if c == "I":
+                        replstr, bsd_append, count_after_replace = value, False, False
+                    elif c == "J":
+                        replstr, bsd_append, count_after_replace = value, True, False
+                    elif c == "L" or (c == "n" and not _xargs_batch_count_is_one(value)):
+                        # ``-L`` (max-lines) at ANY count, and ``-n`` (max-args)
+                        # with N != 1, are count options: GNU xargs appends the
+                        # stdin word after one of them, BSD xargs keeps ``-I``
+                        # replace mode.  ``-n1`` is the one count that leaves
+                        # ``-I`` unchanged on both.
+                        count_after_replace = True
+                    # The argument ends this token either way.
+                    break
+                if c in _XARGS_OPTIONAL_ARG_LETTERS:
+                    # Optional argument, ATTACHED ONLY: a lone letter never
+                    # reaches the next word.  ``i`` sets the replstr (attached
+                    # value, else the default ``{}``); ``l`` (max-lines) is a
+                    # count option at any count, like ``-L``; ``e`` is neither.
+                    if c == "i":
+                        replstr = attached if attached else "{}"
+                        bsd_append = count_after_replace = False
+                    elif c == "l":
+                        count_after_replace = True
+                    break
+                # A no-argument flag: keep scanning the bundle.
+                j += 1
+            i += 2 if consumed_next else 1
+            continue
+        # A non-option word is xargs's UTILITY -- a transparent wrapper
+        # (``env``, ``stdbuf``) or the verb itself.  The xargs options end here;
+        # the replacement string parsed from the options BEFORE it still
+        # applies, and xargs substitutes it into the WHOLE utility command
+        # (``xargs -i env ssh {}host`` runs ``env ssh localhost``), so the
+        # caller keeps substituting into the verb's own args rather than
+        # dropping them.  Stop reading options, keep the parsed replstr.
+        break
+    return replstr, True, bsd_append, count_after_replace
+
+
 def _xargs_here_string_rebuild(
-    verb: str, tokens: "list[str]", xargs_index: int, verb_index: int
+    verb: str,
+    tokens: "list[str]",
+    xargs_index: int,
+    verb_index: int,
+    raw_tokens: "list[str] | None" = None,
 ) -> "str | None":
     """The command an xargs-launched verb runs when a here-string feeds it.
 
     ``xargs ssh <<< localhost`` reaches ``ssh localhost``: bash removes the
     ``<<< word`` pair from the command's argv and delivers the word on stdin,
     and xargs turns stdin into ARGUMENTS for the program it launches --
-    appended after the verb's own args, or substituted for every ``-I``/``-i``
-    replacement token (round-35).  Every piece is in the source text, so the
-    caller can judge the rebuilt command exactly like a directly-typed one.
-    Returns ``None`` when no here-string feeds this simple command.  Tokens
-    are kept verbatim (quotes and mask sentinels intact) so the rebuilt text
-    walks the caller's own tokenizer unchanged.
+    SUBSTITUTED for the replacement string resolved from xargs's own options
+    (``-I``/``-i``/``-J``/``--replace``), or APPENDED after the verb's args when
+    there is no replace option (and, for BSD ``-J``, when no argument equals the
+    replstr).  The option run is parsed once, as ``getopt`` does, yielding a
+    SINGLE replacement string (:func:`_xargs_replacement_string`); the command
+    it builds is the argv xargs actually execs, so the caller judges exactly
+    that.  Where GNU and BSD xargs exec different argvs -- a count option after
+    a replace option whose marker occurs -- both are returned, joined by a
+    command separator, and the caller judges each.  *raw_tokens*, when given,
+    carries the ORIGINAL-case tokens aligned 1:1 with *tokens* (the floor
+    lowercases for host matching, but the option letter case is
+    load-bearing), so the option run is read from them and the host text from
+    *tokens*.  Returns ``None`` only when no here-string feeds this simple
+    command; a malformed option run fails closed by judging the stdin word as
+    the verb's destination.  Tokens are kept verbatim (quotes and mask
+    sentinels intact) so the rebuilt text walks the caller's tokenizer
+    unchanged.
     """
     payload: "str | None" = None
     consumed: "set[int]" = set()
+    # Read a position in its ORIGINAL case (so ``-I`` is told from ``-i`` and
+    # the exact-case replstr substitutes into exact-case args -- ``-I H`` into
+    # ``Hcalhost`` is one ``H``, not the two the lowered ``h`` would hit) only
+    # where the original-case token lowers to EXACTLY the lowered one.  A word
+    # the lowered pipeline rewrote (an assignment-resolved ``"$H"alhost``)
+    # keeps its resolved lowered form, and its letter case counts as unknown.
+    # Boundary tests read the lowered tokens (``_ends_argv`` keys on
+    # case-invariant structure); the caller gets the result lowercased.
+    src: "list[str]" = list(tokens)
+    known: "list[bool]" = [False] * len(tokens)
+    if raw_tokens is not None and len(raw_tokens) == len(tokens):
+        for k, raw in enumerate(raw_tokens):
+            if raw.lower() == tokens[k]:
+                src[k], known[k] = raw, True
     # A redirection can sit anywhere in the simple command, including BEFORE
-    # the utility word (``<<< localhost xargs ssh``), so the scan covers the
+    # the utility word (``<<< localhost xargs ssh``) and BETWEEN xargs and its
+    # own options (``xargs <<< localhost -I{} ssh {}``), so the scan covers the
     # whole simple command: back to the token after the previous separator,
-    # forward to the next one.
+    # forward to the next one.  bash applies redirections left to right, so
+    # the LAST here-string is the stdin xargs reads; every here-string pair is
+    # removed from argv.
     start = xargs_index
     while start > 0 and not _ends_argv(tokens[start - 1]):
         start -= 1
     for j in range(start, len(tokens)):
-        tok = tokens[j]
-        if _ends_argv(tok):
+        if _ends_argv(tokens[j]):
             break
-        hs = _here_string_payload(tok)
+        hs = _here_string_payload(src[j])
         if hs is None:
             continue
         if hs:
             payload = hs
-            consumed = {j}
+            consumed.add(j)
         elif j + 1 < len(tokens) and not _ends_argv(tokens[j + 1]):
-            payload = tokens[j + 1]
-            consumed = {j, j + 1}
-        break
+            payload = src[j + 1]
+            consumed.update((j, j + 1))
     if payload is None:
         return None
-    # xargs's own options decide HOW stdin becomes argv: an ``-I``/``-i``
-    # replacement token is swapped in wherever it appears among the verb's
-    # args; with none, the stdin words are APPENDED after them.
-    replstr: "str | None" = None
-    for k in range(xargs_index + 1, verb_index):
-        opt = tokens[k].strip("\"'")
-        if opt == "-I" and k + 1 < verb_index:
-            replstr = tokens[k + 1].strip("\"'")
-        elif opt.startswith("-I") and len(opt) > 2:
-            replstr = opt[2:]
-        elif opt in ("-i", "--replace"):
-            replstr = "{}"
-        elif opt.startswith("--replace="):
-            replstr = opt.split("=", 1)[1] or "{}"
-        elif opt.startswith("-i") and not opt.startswith("--") and len(opt) > 2:
-            replstr = opt[2:]
-    args: "list[str]" = []
+    arg_indices: "list[int]" = []
     for j in range(verb_index + 1, len(tokens)):
         if j in consumed:
             continue
-        tok = tokens[j]
-        if _ends_argv(tok):
+        if _ends_argv(tokens[j]):
             break
-        args.append(tok)
-    if replstr is not None:
-        # xargs substitutes the replacement token ANYWHERE inside an argument
-        # (``ssh user@{}`` becomes ``ssh user@localhost``), so the rebuild
-        # replaces substrings, not only whole tokens.
-        args = [tok.replace(replstr, payload) if replstr in tok else tok for tok in args]
-    else:
-        args.append(payload)
-    return " ".join([verb, *args]).strip()
+        arg_indices.append(j)
+    # xargs never sees a redirection: bash removes it (and a detached target)
+    # from argv before xargs parses its options.
+    opt_indices: "list[int]" = []
+    skip_target = False
+    for j in range(xargs_index + 1, verb_index):
+        if j in consumed:
+            continue
+        if skip_target:
+            skip_target = False
+            continue
+        redirect = _REDIRECT_START_RE.match(tokens[j])
+        if redirect is not None:
+            skip_target = redirect.end() == len(tokens[j])
+            continue
+        opt_indices.append(j)
+    if any(
+        not known[j]
+        and tokens[j].strip("\"'").startswith("-")
+        and not tokens[j].strip("\"'").startswith("--")
+        and _XARGS_CASE_FOLDED_LETTERS.intersection(tokens[j])
+        for j in opt_indices
+    ):
+        # The lowered tokens cannot tell ``-I KEY`` from ``-i key``.
+        return _XARGS_CASE_UNKNOWN
+    replstr, parseable, bsd_append, count_after_replace = _xargs_replacement_string(
+        [src[j] for j in opt_indices]
+    )
+    # With the replstr's own case unknown, match it case-insensitively.
+    opts_known = all(known[j] for j in opt_indices)
+    args = [src[j] if opts_known else tokens[j] for j in arg_indices]
+
+    def _finish(parts: "list[str]") -> str:
+        rebuilt = " ".join(parts).strip()
+        return rebuilt.lower()
+
+    if not parseable:
+        # A required-argument option is missing its value (a malformed option
+        # run): the verb's real argv cannot be reconstructed, so fail closed by
+        # judging the stdin word as the verb's destination (a self payload
+        # denies; a far one is allowed by local identity).
+        return _finish([verb, payload])
+    appended = _finish([verb, *args, payload])
+    if replstr is None:
+        # No replace option: xargs APPENDS the stdin word after the verb's args.
+        return appended
+    # The replstr in each arg's own case: exact where both are original-case,
+    # lowered where either was read from the lowered tokens.
+    markers = [replstr if opts_known and known[j] else replstr.lower() for j in arg_indices]
+    if bsd_append:
+        # BSD ``-J`` replaces only the FIRST argument EQUAL to its replstr (a
+        # distinct word, never a substring of one) and APPENDS the stdin word
+        # when no argument is.
+        for k, tok in enumerate(args):
+            if tok.strip("\"'") == markers[k]:
+                return _finish([verb, *args[:k], payload, *args[k + 1 :]])
+        return appended
+    present = bool(replstr) and any(m in tok for m, tok in zip(markers, args))
+    subbed_args = [tok.replace(m, payload) for m, tok in zip(markers, args)] if present else args
+    substituted = _finish([verb, *subbed_args])
+    if not count_after_replace:
+        # A GNU/BSD replace option substitutes where the replstr occurs; with
+        # the marker absent it runs the command UNCHANGED (the stdin word
+        # reaches no argv slot), so appending it there would fabricate a self
+        # dial and newly refuse a legitimate far-host scp/rsync.
+        return substituted
+    # A count option follows the replace option: BSD xargs substitutes, GNU
+    # xargs appends with the marker left literal.  Both platforms run their
+    # own argv, so both are judged; with the marker absent the BSD argv is the
+    # unchanged command the caller's walk already judges.
+    if not present:
+        return appended
+    return f"{substituted} ; {appended}"
 
 
 def _operand_span_end(run: list[str], idx: int, text: str) -> int:

@@ -252,9 +252,29 @@ def _url_payload_command(n: int) -> str:
 #: port). A TWO-field value always fails closed (its last field can be a local
 #: socket path, a real reverse forward in). So ``gh ... -R owner/repo`` is allowed
 #: while ``-R 2222:localhost:22``, ``-R 0`` and ``-R 2222:/run/docker.sock`` fail
-#: closed. ``mksh`` also joins ``_NESTED_SHELL_PROGRAMS`` so its ``-c`` payload is
-#: walked like ``ksh``.
-_PACKAGE_LINE_BUDGET = 28_910
+#: closed.
+#:
+#: Raised again, from 28,910, for the xargs reverse-forward fix: an
+#: argv-substituting launcher (``xargs``/``parallel`` and any alias or path
+#: spelling) builds the verb's real argv from run-time stdin, so the ``-R``
+#: self-forward exemption is trusted only for a LONE frame whose ssh verb is at
+#: program position -- failing closed when ssh is reached through a launcher,
+#: nested shell, or expansion, with no launcher name list.  The here-string
+#: rebuild parses the xargs option run as getopt does -- a single replacement
+#: string, read from the original-case tokens so ``-I`` (required arg) is told
+#: from ``-i`` (optional, attached only) -- and anchors on the xargs nearest the
+#: verb; the quoted-separator mask moved to ``shell_normalizer``.  A count
+#: option (``-L``/``-l``/``--max-lines`` at every count, ``-n``/``--max-args``
+#: other than 1) after a replace option makes GNU and BSD xargs exec different
+#: argvs, so both are judged, and redirections between xargs and its options
+#: are removed before the parse, as bash removes them.  BSD ``-J`` replaces
+#: only an argument equal to its replstr, and a glued ``-r`` bundle is a
+#: reverse forward only for an ssh at program position.  A nested payload
+#: carries its original-case spelling into the recursion, an original-case
+#: token is used only where it lowers to exactly the lowered one, and an xargs
+#: option run whose letter case is unknown fails closed. No pattern moved and
+#: no pass changed.
+_PACKAGE_LINE_BUDGET = 29_330
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

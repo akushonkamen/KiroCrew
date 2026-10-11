@@ -8693,6 +8693,13 @@ class TestSandboxEscapeSshSelf:
             # into the surrounding word (``$((0x7f)).0.0.1`` -> ``127.0.0.1``).
             "ssh $((0x7f)).0.0.1 id",
             "scp /tmp/f $((0x7f)).0.0.1:/tmp/x",
+            # A verb glued behind a separator onto rsync's ``-e`` value is a
+            # SEPARATE command, not part of the value: ``-e ssh;ssh -p 22
+            # localhost`` runs ``ssh -p 22 localhost`` after the ``;``, so the
+            # token carrying the separator is left for the walk, not swallowed
+            # as the consumed ``-e`` value.
+            "rsync -e ssh;ssh -p 22 localhost",
+            "rsync -e ssh|ssh -v localhost",
         ],
     )
     def test_self_targets_are_denied(self, cmd):
@@ -8882,7 +8889,28 @@ class TestSandboxEscapeSshSelf:
             "ssh far-host.example.com gh issue develop -R a/b/c",
             "ssh far-host.example.com 'gh issue list -R o/r'",
             "ssh user@far-host.example.com gh pr list -R o/r",
+            # The GLUED remote-command flag reads the same as the spaced one.
+            "ssh far-host.example.com gh issue list -Ro/r",
             "scp -R o/r file far-host.example.com:/tmp/x",
+            # A remote command's own glued ``-r`` bundle (``ls -rt``, ``grep
+            # -rn``, ``sort -rn``, ``rsync -rv``, ``chmod -Rv``) is NOT a reverse
+            # forward: after the remote command begins, only a port/colon-spec
+            # value is still read as a ``-R`` forward, so a non-spec ``r`` bundle
+            # dials nothing and the connection to the far host stays allowed.
+            "ssh far-host.example.com ls -rt",
+            "ssh far-host.example.com grep -rn foo .",
+            "ssh far-host.example.com sort -rn f",
+            "ssh far-host.example.com chmod -Rv 644 d",
+            "rsync -e ssh -rv src far-host.example.com:dst",
+            # A NON-LITERAL destination (a variable, a placeholder) never flips
+            # the remote-command boundary, but the remote command's own glued
+            # ``-r`` bundle still carries a bare flag remainder, not a port or
+            # socket spec, so it is not a reverse forward: these fleet/fan-out
+            # loops stay allowed.
+            'ssh "$h" ls -rt /var/log/app',
+            'ssh "$DEPLOY_HOST" grep -rn ERROR /var/log/app',
+            "echo far-host.example.com | xargs -I{} ssh {} ls -rt /var/log",
+            "xargs -I % ssh % sort -rn /var/log/counts <<< far-host.example.com",
         ],
     )
     def test_remote_command_nonport_forward_value_is_allowed(self, cmd):
@@ -8931,6 +8959,13 @@ class TestSandboxEscapeSshSelf:
             # AFTER the destination, never for a real `-R`/`-o RemoteForward` option.
             "ssh -R o/r far-host.example.com",
             "ssh -R tmp/s far-host.example.com",
+            # The GLUED socket-path spelling is the same real reverse forward
+            # and must fail closed exactly like the spaced one.
+            "ssh -Rtmp/s far-host.example.com",
+            "ssh -Rrun/x far-host.example.com",
+            # A glued service-name port (OpenSSH a2port resolves it) is a real
+            # reverse forward too, so the glued ``-R`` is checked unconditionally.
+            "ssh -Rmysql far-host.example.com",
             "ssh -R /run/user/1000/bus far-host.example.com",
             "ssh -o remoteforward=run/x far-host.example.com",
             "scp -oRemoteForward=o/r file far-host.example.com:/t",
@@ -8938,6 +8973,11 @@ class TestSandboxEscapeSshSelf:
             # remote-command word, so a `-R` that follows the destination with no
             # command word before it is still a real option, not a remote flag.
             "ssh far-host.example.com -R tmp/s",
+            # The GLUED socket-path/port spelling after the host is a real
+            # reverse forward too: its ``/``-bearing or numeric value is a
+            # local socket/port, so it fails closed even past the destination.
+            "ssh far-host.example.com -Rtmp/s",
+            "ssh far-host.example.com -R2222",
             "ssh -v far-host.example.com -R run/x",
             "ssh far-host.example.com -R o/r",
             # A word that can expand/glob to NOTHING between the host and `-R`
@@ -8961,6 +9001,12 @@ class TestSandboxEscapeSshSelf:
             "ssh far-host.example.com $( true ) -R run/x",
             "word=gh; ssh -N far-host.example.com ${word:2} -R tmp/s",
             "ssh $(: x ) far-host.example.com -R tmp/s",
+            # A ``proxycommand=``/``localcommand=`` value is a command line ssh
+            # runs locally; the floor recurses on it, and that recursion must
+            # not trust token position (the value lost its caller's expansion
+            # context), so a ``-R`` socket path inside it fails closed.
+            "a=x; ssh -o 'proxycommand=ssh -p 22 $a far-host -R tmp/s' h",
+            "ssh -o 'localcommand=ssh far-host -R tmp/s' far-host.example.com",
         ],
     )
     def test_portshaped_self_forward_in_remote_command_stays_refused(self, cmd):
@@ -9172,9 +9218,350 @@ class TestSandboxEscapeSshSelf:
         assert _denied_by("<<< localhost xargs ssh") == self._RULE
         assert _denied_by("<<< localhost sudo xargs ssh") == self._RULE
         assert _denied_by("xargs -I{} ssh user@{} <<< localhost") == self._RULE
+        # A detached ``-I`` argument is the replacement string: the here-string
+        # ``localhost`` lands in the destination slot, so the rebuild is a self
+        # dial.  An ANSI-C ``$'\x49'`` spells an uppercase ``I`` the lowercase
+        # fold does not touch, and it must be recognized the same way.
+        assert _denied_by("xargs -I KEY ssh KEY <<< localhost") == self._RULE
+        assert _denied_by(r"xargs $'\x2d\x49' KEY ssh KEY <<< localhost") == self._RULE
+        # The options are parsed as getopt does, from the ORIGINAL-case tokens:
+        # ``-I`` takes a required argument, ``-i`` an optional one taken only
+        # when ATTACHED, and the LAST replace option wins.  So a lone ``-i``
+        # (default ``{}``) followed by ``-Ihost`` leaves ``host`` as the replstr
+        # -- ``host`` fills, and the rebuild is ``ssh localhost`` (the GPT
+        # finding: a lone ``-i`` must NOT consume the next word).
+        assert _denied_by("xargs -i -Ihost ssh host <<< localhost") == self._RULE
+        assert _denied_by("xargs -i -I host ssh host <<< localhost") == self._RULE
+        assert _denied_by("xargs -i env ssh {} <<< localhost") == self._RULE
+        assert _denied_by(r"xargs $'\x2d\x49' -KEY ssh -KEY <<< localhost") == self._RULE
+        # A valueless ``-o``/``-r`` bundled before the replace letter, and the
+        # BSD ``-J`` replace flag, feed the same ``ssh localhost`` and deny too.
+        assert _denied_by("xargs -oI KEY ssh KEY <<< localhost") == self._RULE
+        assert _denied_by("xargs -rI KEY ssh KEY <<< localhost") == self._RULE
+        assert _denied_by("xargs -J KEY ssh KEY <<< localhost") == self._RULE
+        # ``-J`` (BSD) APPENDS the stdin word when its replstr does not occur in
+        # the command, so a lone ``-J %`` with none in the args still dials.
+        assert _denied_by("xargs -J % ssh <<< localhost") == self._RULE
+        # BSD ``-R`` (max-replacements) and ``-S`` (replsize) take a REQUIRED
+        # value, so the value is not misread as the utility and the real verb
+        # is still rebuilt.
+        assert _denied_by("xargs -R 5 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -S 1024 ssh <<< localhost") == self._RULE
+        # ``-n``/``-L`` (max-args / max-lines) with N != 1 are count options:
+        # GNU xargs appends the stdin word after one of them when the replstr
+        # occurs nowhere, so ``xargs -rI{} -n2 ssh <<< localhost`` runs ``ssh
+        # localhost``.  The long spellings behave the same way.
+        assert _denied_by("xargs -rI{} -n2 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -rI{} -L2 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -n 2 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-args=2 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines=2 ssh <<< localhost") == self._RULE
+        # ``-n2`` BEFORE ``-I{}`` leaves the later replace option in charge, so
+        # substitution applies and this dials self.
+        assert _denied_by("xargs -n2 -I{} ssh {} <<< localhost") == self._RULE
+        # ``-n1`` leaves ``-I`` unchanged, so a marker that does not occur runs
+        # the command UNCHANGED (no self dial fabricated from the stdin word).
+        assert _denied_by("xargs -rI{} -n1 ssh <<< localhost") is None
+        # ``-L``/``-l``/``--max-lines`` are count options at EVERY count, ``1``
+        # and the implicit-one forms included, so with the marker absent each
+        # runs ``ssh localhost``.  A later ``-I`` still wins over an earlier
+        # ``-L1``.
+        assert _denied_by("xargs -rI{} -L1 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -i -L1 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -l ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -l1 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines=1 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-l=1 ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -L1 -I{} ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I% -L1 scp src far-host.example.com:/dst <<< /tmp/f") is None
+        # The count is parsed NUMERICALLY, so ``-n01``/``--max-args=01``/``-n+1``
+        # are 1 and keep replace mode -- a substituting ``{}`` still dials self,
+        # and a string ``"01" != "1"`` must not drop replace and let it slip.
+        assert _denied_by("xargs -I{} -n01 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-args=01 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -n+1 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -rI{} -n01 ssh <<< localhost") is None
+        # A transparent wrapper (``env``/``stdbuf``) BETWEEN xargs and the verb
+        # is xargs's utility; the replace option parsed before it still applies,
+        # and xargs substitutes it into the whole utility command, so the verb's
+        # own args are substituted rather than dropped: ``-i env ssh {}host``
+        # with stdin ``local`` is ``ssh localhost``.  A wrapper with no replace
+        # option appends the stdin word.
+        assert _denied_by("xargs stdbuf ssh <<< localhost") == self._RULE
+        assert _denied_by("xargs -i env ssh {}host <<< local") == self._RULE
+        assert _denied_by("xargs -I{} env ssh {}host <<< local") == self._RULE
+        # The exact-case replstr substitutes into the exact-case args (``-I H``
+        # fills the ONE ``H`` of ``Hcalhost``, not the two a lowered ``h`` hits),
+        # so the rebuild is ``ssh localhost``, not a corrupted ``locallost``.
+        assert _denied_by("xargs -I H ssh Hcalhost <<< lo") == self._RULE
+        # Only the LAST replace option counts (getopt last-wins), so an earlier
+        # ``-Ih`` does not corrupt the ``-Ihost`` substitution.
+        assert _denied_by("xargs -Ih -Ihost ssh host <<< localhost") == self._RULE
+        # The launcher is the xargs NEAREST the verb; a wrapper's option value
+        # that happens to read ``xargs`` (``env -u xargs``) is not the anchor,
+        # and a wrapper's own flags (``stdbuf -i 0``) are not xargs options --
+        # the real ``xargs ssh`` still rebuilds ``ssh ... localhost``.
+        assert _denied_by("env -u xargs -i xargs ssh <<< localhost") == self._RULE
+        assert (
+            _denied_by("env -u xargs stdbuf -i 0 xargs ssh -o connecttimeout=10 <<< localhost")
+            == self._RULE
+        )
+        # ``ssh {}host`` under ``-i`` default ``{}`` with stdin ``local`` is
+        # ``ssh localhost`` -- the single replstr the options yield, substituted
+        # as GNU xargs runs it.
+        assert _denied_by("xargs -i ssh {}host <<< local") == self._RULE
+        # A ``-I`` replacement that occurs in the args is the ONLY reading: the
+        # payload fills it, so a here-string whose destination the resolver
+        # classifies as REMOTE stays allowed (no spurious ``{}`` rebuild that
+        # reads the placeholder itself as the destination).  The autouse fixture
+        # stubs the resolver to "remote" for these; the here-string path uses
+        # the SAME resolver policy as the direct dial, so an unresolved/pending
+        # dotted name fails closed in both (see
+        # ``test_here_string_and_direct_dial_agree_on_dns``).
+        assert _denied_by("xargs -I HOST ssh HOST uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -I % ssh % uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -r -I HOST ssh HOST df -h <<< far-host.example.com") is None
         assert _denied_by("<<< far.example.com xargs ssh") is None
         assert _denied_by("xargs -I{} ssh user@{} <<< far.example.com") is None
         assert _denied_by("xargs ssh <<< remote.example.com") is None
+        # GNU ``-I``/``-i``/``--replace`` whose marker does NOT occur in the
+        # args run the command UNCHANGED (the stdin word reaches no argv slot),
+        # so appending it would fabricate a self operand and newly refuse a
+        # legitimate far-host scp/rsync.  Only BSD ``-J`` appends a missing
+        # marker, which is why ``-J`` with none in the args still denies above.
+        assert _denied_by("xargs -I% scp src far-host.example.com:/dst <<< /tmp/f") is None
+        assert _denied_by("xargs -i scp src far-host.example.com:/dst <<< /tmp/f") is None
+        assert _denied_by("xargs --replace=% rsync -a src far-host.example.com:/dst <<< x") is None
+        # GNU ``--max-lines`` takes an OPTIONAL argument, so a lone one does not
+        # consume ``ssh`` as its value -- the rebuilt ``ssh localhost`` denies.
+        assert _denied_by("xargs --max-lines ssh <<< localhost") == self._RULE
+
+    def test_count_option_keeps_an_explicit_replace_mode(self):
+        # BSD xargs (macOS) keeps ``-I`` replace mode under ``-n``/``-L`` at any
+        # count, so ``xargs -I{} -L2 ssh {} <<< localhost`` runs ``ssh
+        # localhost`` there.  A count option never drops an explicit replace
+        # option: the replstr is substituted wherever it occurs.
+        assert _denied_by("xargs -I{} -L2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -L1 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -n2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -n 3 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -l ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -i -L2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -rI KEY -L2 ssh KEY <<< localhost") == self._RULE
+        assert _denied_by("xargs --replace -L2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines=2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-args=2 ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines ssh {} <<< localhost") == self._RULE
+        # The same shape against a far host is allowed, and so is a self word
+        # that substitutes into the remote command rather than the host.
+        assert _denied_by("xargs -I{} -L2 ssh {} <<< far-host.example.com") is None
+        assert _denied_by("xargs -I{} -n2 ssh {} uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -I{} -L2 ssh far-host.example.com {} <<< localhost") is None
+        # Without a replace option ``{}`` is a literal word on every xargs and
+        # the stdin word is appended, so ``-L2`` alone does not substitute it.
+        assert _denied_by("xargs -L2 ssh far-host.example.com <<< localhost") is None
+        assert _denied_by("xargs -L2 ssh {} <<< localhost") is None
+        assert _denied_by("xargs -L2 ssh <<< localhost") == self._RULE
+
+    def test_count_option_judges_both_gnu_and_bsd_argv(self):
+        # With the marker present, GNU xargs drops replace mode after a count
+        # option and APPENDS the stdin word, while BSD substitutes it, so the
+        # two exec different argvs and each is judged.  GNU runs
+        # ``ssh -4 localhost`` here even though BSD runs ``ssh -localhost``.
+        assert _denied_by("xargs -rI4 -L2 ssh -4 <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} --max-lines ssh -v{} <<< localhost") == self._RULE
+        assert _denied_by("xargs -I{} -n2 ssh -v{} <<< localhost") == self._RULE
+        # Without a count option both families substitute, so only the
+        # substituted argv runs.
+        assert _denied_by("xargs -rI4 ssh -4 <<< localhost") is None
+        # ``-n1`` changes neither family, and a later replace option wins.
+        assert _denied_by("xargs -rI4 -n1 ssh -4 <<< localhost") is None
+        assert _denied_by("xargs -L2 -rI4 ssh -4 <<< localhost") is None
+
+    def test_here_string_redirects_are_removed_before_xargs_parses(self):
+        # bash removes every redirection from argv, wherever it sits, so a
+        # here-string or another redirect BETWEEN xargs and its options does
+        # not end the option run.
+        assert _denied_by("xargs <<< localhost -I{} ssh {}") == self._RULE
+        assert _denied_by("xargs <<<localhost -I{} ssh {}") == self._RULE
+        assert _denied_by("xargs 2>/dev/null -I{} ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs 2> /dev/null -I{} ssh {} <<< localhost") == self._RULE
+        assert _denied_by("xargs <<< far-host.example.com -I{} ssh {}") is None
+        # The LAST here-string is the stdin xargs reads.
+        assert _denied_by("xargs -I{} ssh {} <<< far-host.example.com <<< localhost") == (
+            self._RULE
+        )
+        assert _denied_by("xargs -I{} ssh {} <<< localhost <<< far-host.example.com") is None
+
+    def test_bsd_j_replaces_only_an_argument_equal_to_its_replstr(self):
+        # BSD ``-J`` replaces the FIRST argument that EQUALS its replstr and
+        # appends the stdin word when none does; a replstr inside an option
+        # word is not a marker, so ``-l%`` stays literal and the host is
+        # appended.
+        assert _denied_by("xargs -J % ssh -l% <<< localhost") == self._RULE
+        assert _denied_by("xargs -J % ssh -o% <<< localhost") == self._RULE
+        assert _denied_by("xargs -J % ssh -l% % <<< localhost") == self._RULE
+        assert _denied_by("xargs -J % ssh % -l% <<< localhost") == self._RULE
+        assert _denied_by("xargs -J % ssh -l% % <<< far-host.example.com") is None
+        assert _denied_by("xargs -J % ssh far-host.example.com -l% <<< uptime") is None
+
+    def test_detached_value_options_before_a_replace_option(self):
+        # ``-P`` takes a REQUIRED value, so a detached ``-P 4`` is stepped over
+        # before ``-I %`` and the replstr still substitutes.
+        assert _denied_by("xargs -P 4 -I % ssh % uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -P4 -I % ssh % uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -I % -P 4 ssh % uptime <<< far-host.example.com") is None
+        assert _denied_by("xargs -P 4 -I % ssh % uptime <<< localhost") == self._RULE
+        assert _denied_by("xargs -I % -P 4 ssh % uptime <<< localhost") == self._RULE
+
+    def test_nested_xargs_keeps_its_option_letter_case(self):
+        # A nested payload (a remote-shell value, a ``bash -c`` body) is cut
+        # from the lowered text; its original-case spelling is carried into the
+        # recursion, so ``-I KEY --replace=ZZ`` is not misread as ``-i key``.
+        nested = "bash -c 'xargs -I KEY --replace=ZZ ssh ZZcalhost <<< lo'"
+        assert _denied_by(nested) == self._RULE
+        assert _denied_by('rsync -e "' + nested + '" far-host.example.com:/x .') == self._RULE
+        # A decoy spelled in another case does not hide the real spelling.
+        decoy = "echo 'xargs -i key --replace=zz ssh zzcalhost <<< lo'; "
+        assert _denied_by(decoy + nested) == self._RULE
+        assert _denied_by("bash -c 'xargs -I % ssh % uptime <<< far-host.example.com'") is None
+        assert _denied_by("bash -c 'xargs -r ssh <<< far-host.example.com'") is None
+
+    def test_rewritten_words_keep_their_resolved_form_in_the_rebuild(self):
+        # An original-case token is used only where it lowers to exactly the
+        # lowered one; a word the lowered pipeline rewrote (an assignment
+        # resolved into the here-string) keeps its resolved form.
+        assert _denied_by('H=loc; xargs ssh <<< "$H"alhost') == self._RULE
+        assert _denied_by('H=loc; xargs -I{} ssh {} <<< "$H"alhost') == self._RULE
+        assert _denied_by('R=Z; xargs -I "$R" ssh Zcalhost <<< lo') == self._RULE
+        assert _denied_by('H=far-host; xargs -I{} ssh {} uptime <<< "$H".example.com') is None
+
+    def test_xargs_option_case_unknown_fails_closed(self):
+        import kiro_crew.security.argv_floor as af
+
+        # Without original-case text, ``-i key`` may be ``-I KEY``, so the argv
+        # xargs runs is unknown and the floor refuses.
+        assert af._is_ssh_to_self("xargs -i key --replace=zz ssh zzcalhost <<< lo")
+        # With no case-folded letter in the option run the lowered parse is exact.
+        assert not af._is_ssh_to_self("xargs -0 --replace=zz ssh zz uptime <<< far-host")
+
+    def test_ssh_word_that_is_another_programs_data_is_not_a_reverse_forward(self):
+        # A glued ``-r`` bundle is read as a reverse forward only for an ssh
+        # that is its command's PROGRAM: ``ssh`` as a unit name or as scp's
+        # ``-S`` program value is data, and the bundle belongs to that program.
+        assert _denied_by("journalctl -u ssh -rn 100 --no-pager") is None
+        assert _denied_by("journalctl -u ssh -r") is None
+        assert _denied_by("scp -S ssh -rp ./dist far-host.example.com:/srv/app") is None
+        assert _denied_by("ssh far-host.example.com journalctl -u ssh -rn 100") is None
+        assert _denied_by("ssh far-host.example.com 'journalctl -u ssh -rn 100'") is None
+        # The program-position spellings stay refused.
+        assert _denied_by("ssh -Rmysql far-host.example.com") == self._RULE
+        assert _denied_by("ssh -Rtmp/s far-host.example.com") == self._RULE
+        assert _denied_by("/usr/bin/ssh -Rmysql far-host.example.com") == self._RULE
+        assert _denied_by("ssh -R2222:localhost:22 far-host.example.com") == self._RULE
+        assert _denied_by("scp -S ssh -rp ./dist localhost:/srv/app") == self._RULE
+
+    def test_here_string_and_direct_dial_agree_on_dns(self, monkeypatch):
+        # The here-string rebuild judges its destination through the SAME
+        # resolver policy as the direct dial, so the two paths never drift: a
+        # dotted name that resolves to this host is a self dial in both, one
+        # that resolves elsewhere is allowed in both, and a PENDING (unresolved)
+        # dotted name fails closed in both -- a loopback alias cannot slip
+        # through on first contact by being wrapped in ``xargs … <<<``.
+        for host, resolves_self in (
+            ("selfalias.example.com", True),
+            ("elsewhere.example.com", False),
+        ):
+            monkeypatch.setattr(
+                _argv_floor, "_resolved_host_verdict", lambda h, _r=resolves_self, **_kw: _r
+            )
+            direct = _denied_by(f"ssh {host} uptime")
+            via_xargs = _denied_by(f"xargs ssh <<< {host}")
+            assert direct == via_xargs, host
+            assert (direct == self._RULE) is resolves_self, host
+
+        # A PENDING verdict is a resolver cache MISS answered by ``fail_closed``;
+        # stub the verdict to echo that flag, and both paths must deny.
+        monkeypatch.setattr(
+            _argv_floor, "_resolved_host_verdict", lambda h, *, fail_closed=True: fail_closed
+        )
+        assert _denied_by("ssh pending.example.com uptime") == self._RULE
+        assert _denied_by("xargs ssh <<< pending.example.com") == self._RULE
+        assert _denied_by("xargs -I{} ssh {} <<< pending.example.com") == self._RULE
+
+    def test_xargs_replacement_run_cannot_exempt_a_reverse_forward(self):
+        # round-36 (GPT/Opus): an argv-substituting launcher (``xargs`` /
+        # ``parallel``) builds the verb's real argv from run-time stdin,
+        # substituting it for a replacement token wherever that token sits, so
+        # the destination and the remote-command boundary the static walk reads
+        # are NOT the ones ssh receives.  In ``xargs -I KEY ssh -N KEY 22
+        # far-host -R tmp/s`` the walk reads ``KEY`` as the destination and
+        # ``22`` as the remote command, which would exempt the ``/``-bearing
+        # ``-R`` value as a remote-command flag; but with stdin ``-p`` xargs
+        # runs ``ssh -N -p 22 far-host -R tmp/s`` -- a real reverse forward into
+        # this host.  The ``-R`` path exemption is trusted only for a LONE frame
+        # whose ssh verb is at program position, so it fails closed whenever ssh
+        # is reached through a launcher -- named, aliased, path-qualified,
+        # quote/continuation-spliced, or nested in an inner shell -- without
+        # enumerating launcher names.
+        for cmd in (
+            "printf '%s\\n' -p | xargs -I KEY ssh -N KEY 22 far-host -R tmp/s",
+            "printf x | xargs -I Q ssh -N Q 22 far-host -R tmp/s",
+            "printf x | xargs -I{} ssh -N {} 22 far-host -R run/x",
+            # bundled valueless flags before the replace letter
+            "printf x | xargs -rI KEY ssh -N KEY 22 far-host -R tmp/s",
+            "printf x | xargs -0I KEY ssh -N KEY 22 far-host -R tmp/s",
+            "printf x | xargs -oI KEY ssh -N KEY 22 far-host -R tmp/s",
+            # the BSD ``-J`` replace flag
+            "printf x | xargs -J KEY ssh -N KEY 22 far-host -R tmp/s",
+            # ``--replace`` and an unambiguous abbreviation
+            "printf x | xargs --rep=KEY ssh -N KEY 22 far-host -R tmp/s",
+            "printf x | xargs --replace=Q ssh -N Q 22 far-host -R tmp/s",
+            "printf x | xargs -i ssh -N {} 22 far-host -R tmp/s",
+            # a placeholder NAMED ``xargs`` must not shed the launcher
+            "printf x | xargs -I xargs ssh -N xargs 22 far-host -R tmp/s",
+            # the launched program may be a nested shell that runs ssh
+            "printf -- -p | xargs -I K sh -c 'ssh -N K 22 far-host -R tmp/s'",
+            # a different launcher entirely
+            "printf x | parallel -I KEY ssh -N KEY 22 far-host -R tmp/s",
+            # a quote/backslash splice must not hide the launcher word
+            "printf -- -p | xa''rgs -I K ssh -N K 22 far-host -R tmp/s",
+            "printf -- -p | x\\args -I K ssh -N K 22 far-host -R tmp/s",
+            # name-INDEPENDENT: an alias, env-prefixed, path-qualified or
+            # entirely different launcher is caught because ssh is not at
+            # program position -- no launcher name list is consulted
+            "printf -- -p | gxargs -I K ssh -N K 22 far-host -R tmp/s",
+            "printf -- -p | env_parallel -I K ssh -N K 22 far-host -R tmp/s",
+            "printf -- -p | /opt/homebrew/bin/gxargs -I K ssh -N K 22 far-host -R tmp/s",
+            "printf -- -p | rush -I K ssh -N K 22 far-host -R tmp/s",
+        ):
+            assert _denied_by(cmd) == self._RULE, cmd
+        # ssh at program position of its own simple command keeps the exemption,
+        # even behind a pipe that only feeds its stdin: the connection to the
+        # far host and its remote-command ``gh ... -R o/r`` stay allowed.
+        assert _denied_by("echo far-host.example.com | xargs -I{} ssh {} uptime") is None
+        assert _denied_by("ssh far-host.example.com gh pr list -R o/r | cat") is None
+
+    def test_nested_xargs_here_string_rebuild_is_bounded(self, monkeypatch):
+        # The here-string rebuild emits ONE command per level, so the deny
+        # scan's recursion is bounded by command structure, not exponential in
+        # the number of replace options.
+        # Instrumented deterministically -- a recursion count, not wall-clock.
+        import kiro_crew.security.argv_floor as af
+
+        original = af._is_ssh_to_self
+        calls = [0]
+
+        def counting(text, **kwargs):
+            calls[0] += 1
+            return original(text, **kwargs)
+
+        monkeypatch.setattr(af, "_is_ssh_to_self", counting)
+        level = " ".join("-I k%d" % i for i in range(8))
+        cmd = "xargs " + " | xargs ".join([level + " ssh"] * 6) + " far <<< h0"
+        af._is_ssh_to_self(cmd.lower())
+        assert calls[0] <= 50, f"nested xargs rebuild recursion is not bounded: {calls[0]}"
 
     def test_plain_redirects_still_consume_their_filename(self):
         # The here-string handling must not widen the redirect branch: a

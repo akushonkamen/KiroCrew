@@ -243,7 +243,14 @@ def _url_payload_command(n: int) -> str:
 #: deny-exception check both passes of ``is_denied`` share, which reads a deny
 #: exception through kiro-cli's one ``Running: `` title prefix so a shell title
 #: earns exactly its command's carve-out. No glob, verb or eligibility test moved.
-_PACKAGE_LINE_BUDGET = 28_844
+#:
+#: Raised again, from 28,844, for ``shell_normalizer._SCRIPT_EXECUTES_RE``: its sed
+#: ``e`` branch reads the ``e`` command as a word of the script, not the bare
+#: ``-e``/``-E`` option, so a ``grep -E`` over a product-named directory keeps the
+#: data-consumer exemption. The branch grows a ``(?<!^-)`` guard and its comment states
+#: which terminal ``e`` is the command. Every execute construct it read before is still
+#: read; no other pattern moved.
+_PACKAGE_LINE_BUDGET = 28_850
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

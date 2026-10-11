@@ -35,7 +35,7 @@ vi.mock('../api/client', () => ({
     workspaces: vi.fn().mockResolvedValue({ workspaces: [] }),
     spawnList: vi.fn().mockResolvedValue({ agents: [] }),
     uploadFiles: vi.fn().mockResolvedValue({ paths: [] }),
-    dashboardConfig: vi.fn().mockResolvedValue({}),
+    dashboardConfig: vi.fn().mockResolvedValue({ upload_max_mb: 100 }),
     screenshot: vi.fn().mockResolvedValue({ path: null }),
     fileSearch: vi.fn().mockResolvedValue({ root: '/repo', results: [] }),
     chatSlotAgent: vi.fn().mockResolvedValue(undefined),
@@ -168,9 +168,9 @@ describe('ChatPane upload — a refused upload is surfaced, not silent (#5707)',
     Object.defineProperty(fileInput, 'files', { value: [bigDoc] })
     fireEvent.change(fileInput)
 
-    // The config answered without a figure, so the cap is the config default
-    // (100 MB), the true ceiling for a document, and the message can state it.
-    await waitFor(() => expect(screen.getByText(/File too large: huge\.png \(max 100 MB\)/)).toBeInTheDocument())
+    // The gateway served 100 MB, the true ceiling for a document, so the
+    // message can state it, and names the way to get the file in anyway.
+    await waitFor(() => expect(screen.getByText(/File too large: huge\.png \(max 100 MB\)\. To share it anyway, type @ followed by its location on the computer running Kiro Crew, for example @~\/Downloads\/huge\.png\./)).toBeInTheDocument())
     expect(api.uploadFiles).not.toHaveBeenCalled()
     unmount()
 
@@ -226,7 +226,7 @@ describe('ChatPane upload — a refused upload is surfaced, not silent (#5707)',
       expect(screen.queryByTestId('chat-pane-upload-error')).not.toBeInTheDocument()
       expect(api.uploadFiles).not.toHaveBeenCalled()
     } finally {
-      ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockResolvedValue({})
+      ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockResolvedValue({ upload_max_mb: 100 })
     }
   })
 
@@ -246,20 +246,48 @@ describe('ChatPane upload — a refused upload is surfaced, not silent (#5707)',
       await waitFor(() => expect(api.uploadFiles).toHaveBeenCalled())
       expect(screen.queryByText(/File too large/)).not.toBeInTheDocument()
     } finally {
-      release({})
+      release({ upload_max_mb: 100 })
       ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockResolvedValue({})
     }
   })
 
-  it('reports a failed settings read instead of silently using a default limit', async () => {
-    ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('HTTP 502'))
-    try {
-      renderPane('pane-cfg-failed')
-      expect(await screen.findByTestId('chat-pane-upload-limit-error', {}, { timeout: 5000 })).toHaveTextContent(
-        /file sizes are checked only when the upload reaches the server/,
-      )
-    } finally {
-      ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockResolvedValue({})
+  it('leaves an unknown limit to the server, and names a failed read only beside an upload', async () => {
+    // A failed settings read and an answer without a usable figure both mean
+    // no limit is known here, so the file goes to the server, whose 413 names
+    // its limit. Nothing is shown before an upload: a notice would sit in every
+    // pane whether or not anyone uploads. A failed read is reported as an
+    // error next to the attempt it affects; an answer without a figure is not
+    // a failure and shows nothing.
+    for (const [key, answer, failed] of [
+      ['pane-cfg-failed', () => Promise.reject(new Error('HTTP 502')), true],
+      ['pane-cfg-nofigure', () => Promise.resolve({}), false],
+    ] as const) {
+      ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockImplementation(answer)
+      try {
+        const zip = new File(['x'], 'big.zip', { type: 'application/zip' })
+        Object.defineProperty(zip, 'size', { value: 150 * 1024 * 1024 })
+        const { container, unmount } = renderPane(key)
+        await waitFor(() => expect(api.dashboardConfig).toHaveBeenCalled())
+        await new Promise(r => setTimeout(r, 0))
+        expect(screen.queryByText(/size limit/i)).not.toBeInTheDocument()
+        const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+        Object.defineProperty(fileInput, 'files', { value: [zip] })
+        ;(api.uploadFiles as ReturnType<typeof vi.fn>).mockClear()
+        fireEvent.change(fileInput)
+        await waitFor(() => expect(api.uploadFiles).toHaveBeenCalled())
+        expect(screen.queryByText(/File too large/)).not.toBeInTheDocument()
+        if (failed) {
+          const banner = await screen.findByTestId('chat-pane-upload-error')
+          expect(banner).toHaveTextContent("Couldn't load the upload size limit, so the server checks each file instead.")
+          expect(banner).not.toHaveTextContent('HTTP 502')
+        } else {
+          expect(screen.queryByText(/size limit/i)).not.toBeInTheDocument()
+        }
+        unmount()
+      } finally {
+        ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockReset()
+        ;(api.dashboardConfig as ReturnType<typeof vi.fn>).mockResolvedValue({ upload_max_mb: 100 })
+      }
     }
   })
 

@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import logging
 
+from kiro_crew.config.sections import DashboardConfig
+
 logger = logging.getLogger(__name__)
 
-#: The ``dashboard.upload_max_mb`` field default, in bytes. Answered when the
-#: config cannot be read, so a broken config never refuses every upload.
-DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+#: The ``dashboard.upload_max_mb`` field default, in bytes, read from the field
+#: itself so the figure has one spelling. Answered when the config cannot be
+#: read, so a broken config never refuses every upload.
+DEFAULT_UPLOAD_MAX_BYTES = DashboardConfig().upload_max_mb * 1024 * 1024
 
 
 def upload_max_bytes() -> int:

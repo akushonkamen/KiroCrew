@@ -117,4 +117,27 @@ describe('MultiSelect bulk actions', () => {
     expect(deselectAll).toHaveBeenCalledOnce()
     expect(onToggle).not.toHaveBeenCalled()
   })
+
+  it('reports opening and closing, and shows a notice only while open', async () => {
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    render(
+      <MultiSelect
+        label="Languages"
+        options={[{ value: 'vi-VN', label: 'vi-VN' }]}
+        selected={new Set()}
+        onToggle={vi.fn()}
+        summary="None"
+        onOpenChange={onOpenChange}
+        notice="Limit reached"
+      />,
+    )
+    expect(screen.queryByRole('status')).toBeNull()
+    const trigger = screen.getByRole('button', { name: 'Languages' })
+    await user.click(trigger)
+    expect(onOpenChange).toHaveBeenLastCalledWith(true)
+    expect(screen.getByRole('status')).toHaveTextContent('Limit reached')
+    await user.click(trigger)
+    expect(onOpenChange).toHaveBeenLastCalledWith(false)
+  })
 })

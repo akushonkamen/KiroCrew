@@ -17671,7 +17671,8 @@
       "fresh_start_confirm_action": "リセットして再開",
       "fresh_start_failed_queued": "まだキューにメッセージがあります。終わるのを待ってから、もう一度リセットしてください。",
       "fresh_start_failed_busy": "クルーメイトはまだ作業中で止まりませんでした。先に止めてから、もう一度お試しください。",
-      "fresh_start_unsaved_fold": "この会話は忘れられ、メッセージは折りたたまれていますが、折りたたんだ時刻を保存できませんでした。再読み込み後にまた開きます。"
+      "fresh_start_unsaved_fold": "この会話は忘れられ、メッセージは折りたたまれていますが、折りたたんだ時刻を保存できませんでした。再読み込み後にまた開きます。",
+      "dashboard_values_stale": "ライブ値の更新が停止したため、最後に受信した値を表示しています。"
     },
     "tasksCapacityCard": {
       "title": "タスクと処理能力",

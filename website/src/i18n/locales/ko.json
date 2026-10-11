@@ -17671,7 +17671,8 @@
       "fresh_start_confirm_action": "새로 시작",
       "fresh_start_failed_queued": "아직 대기 중인 메시지가 있어요. 끝날 때까지 기다린 뒤 새로 시작을 다시 눌러 주세요.",
       "fresh_start_failed_busy": "크루메이트가 아직 일하고 있고 멈추지 않았어요. 먼저 멈춘 뒤 다시 시도해 주세요.",
-      "fresh_start_unsaved_fold": "이 대화는 잉었고 메시지는 접혀 있지만, 접은 시간이 저장되지 않았어요. 페이지를 다시 불러오면 다시 펵추어져요."
+      "fresh_start_unsaved_fold": "이 대화는 잉었고 메시지는 접혀 있지만, 접은 시간이 저장되지 않았어요. 페이지를 다시 불러오면 다시 펵추어져요.",
+      "dashboard_values_stale": "실시간 값 업데이트가 중단되어 마지막으로 받은 값을 표시합니다."
     },
     "tasksCapacityCard": {
       "title": "작업 및 용량",

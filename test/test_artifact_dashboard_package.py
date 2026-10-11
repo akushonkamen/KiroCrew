@@ -390,6 +390,62 @@ class TestRevertRestoresLayoutOnly:
         assert art.version == before
 
 
+class TestAFieldNameIsNotAPlaceToHideACredential:
+    """A field NAME travels further than its value, so it needs the same gate.
+
+    Field VALUES are redacted on the way out. The names are not: they are served
+    in the package's `fields` list (`member_dashboard.py:865`) and written into
+    the page's data island, so a name shaped like a token is published in clear
+    by the one surface that scrubs everything else.
+
+    `_FIELD_NAME_RE` does not stop it. A lower-case fine-grained-PAT shape fits
+    inside `[a-z][a-z0-9_]{0,63}` with room to spare, and so does a `ghp_` shape.
+
+    The gate is the REDACTOR ITSELF rather than a second copy of its patterns:
+    run the name through the same shim every egress site uses and refuse if it
+    comes back changed. So a companion's extra patterns apply here too, and a
+    pattern added there cannot leave this check behind.
+    """
+
+    #: Assembled from parts on purpose. A literal token shape in the tree trips
+    #: GitHub's push protection, and the point here is the SHAPE, not a secret.
+    FINE_GRAINED = "github" + "_pat_" + "a1b2c3d4e5" * 4
+    CLASSIC = "ghp" + "_" + "a1b2c3d4e5" * 3
+
+    @pytest.mark.parametrize("shape", [FINE_GRAINED, CLASSIC])
+    def test_the_name_rule_alone_would_have_allowed_it(self, shape: str) -> None:
+        """Why the extra gate is needed and not redundant with the regex."""
+        assert dp._FIELD_NAME_RE.fullmatch(shape) is not None
+        assert len(shape) <= 64
+
+    @pytest.mark.parametrize("shape", [FINE_GRAINED, CLASSIC])
+    def test_a_credential_shaped_field_name_is_refused(
+        self, store: ArtifactStore, shape: str
+    ) -> None:
+        # ADDED to a valid model rather than replacing it, so the only thing
+        # wrong with this package is the one field name under test.
+        p = package()
+        p["model"]["types"][shape] = {
+            "type": "number",
+            "label": "PRs",
+            "source": {"agentic": True},
+        }
+        with pytest.raises(ArtifactValidationError) as exc:
+            store.create(name="Sneaky", kind="dashboard", content=json.dumps(p))
+        said = str(exc.value)
+        assert f"model.types.{shape}" in said or "credential" in said
+        # The refusal must not quote the name back in full: an error string is
+        # logged, and echoing the thing we just called credential-shaped would
+        # put it exactly where we are trying to keep it out of.
+        assert shape not in said
+
+    def test_an_ordinary_field_name_still_passes(self, store: ArtifactStore) -> None:
+        """The gate has to be narrow: it refuses what the redactor rewrites and
+        nothing else, so a normal model is unaffected."""
+        art = store.create(name="Fine", kind="dashboard", content=content())
+        assert art.slug
+
+
 class TestRejectInvalid:
     @pytest.mark.parametrize(
         "mutate,expected",

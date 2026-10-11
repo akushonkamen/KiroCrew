@@ -17671,7 +17671,8 @@
       "fresh_start_confirm_action": "重新开始",
       "fresh_start_failed_queued": "还有排队的消息。等它们完成后，再试一次重新开始。",
       "fresh_start_failed_busy": "队友还在工作，没有停下。先停止它，再试一次。",
-      "fresh_start_unsaved_fold": "它已经忘记这段对话，消息已折叠起来，但折叠时间没有保存。重新加载后，它们会再次展开。"
+      "fresh_start_unsaved_fold": "它已经忘记这段对话，消息已折叠起来，但折叠时间没有保存。重新加载后，它们会再次展开。",
+      "dashboard_values_stale": "实时数据已停止更新，以下是最后收到的数值。"
     },
     "tasksCapacityCard": {
       "title": "任务与容量",

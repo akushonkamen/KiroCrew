@@ -18189,7 +18189,8 @@
       "fresh_start_confirm_action": "Começar do zero",
       "fresh_start_failed_queued": "Ainda há mensagens na fila. Espere terminarem e tente Começar do zero de novo.",
       "fresh_start_failed_busy": "O colega ainda está trabalhando e não parou. Pare-o primeiro e tente de novo.",
-      "fresh_start_unsaved_fold": "Ele esqueceu esta conversa e as mensagens ficaram recolhidas, mas a hora em que foram recolhidas não foi salva. Depois de recarregar, elas se expandem de novo."
+      "fresh_start_unsaved_fold": "Ele esqueceu esta conversa e as mensagens ficaram recolhidas, mas a hora em que foram recolhidas não foi salva. Depois de recarregar, elas se expandem de novo.",
+      "dashboard_values_stale": "Os valores ao vivo pararam de atualizar, portanto estes são os últimos recebidos."
     },
     "tasksCapacityCard": {
       "title": "Tarefas e capacidade",

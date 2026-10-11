@@ -18189,7 +18189,8 @@
       "fresh_start_confirm_action": "Ricomincia da capo",
       "fresh_start_failed_queued": "Ci sono ancora messaggi in coda. Aspetta che finiscano, poi riprova Ricomincia da capo.",
       "fresh_start_failed_busy": "Il compagno sta ancora lavorando e non si è fermato. Fermalo prima, poi riprova.",
-      "fresh_start_unsaved_fold": "Ha dimenticato questa conversazione e i messaggi sono ripiegati, ma il momento in cui sono stati ripiegati non è stato salvato. Dopo un ricaricamento tornano a dispiegarsi."
+      "fresh_start_unsaved_fold": "Ha dimenticato questa conversazione e i messaggi sono ripiegati, ma il momento in cui sono stati ripiegati non è stato salvato. Dopo un ricaricamento tornano a dispiegarsi.",
+      "dashboard_values_stale": "I valori in tempo reale non si aggiornano più: questi sono gli ultimi ricevuti."
     },
     "tasksCapacityCard": {
       "title": "Attività e capacità",

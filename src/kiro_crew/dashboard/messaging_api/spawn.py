@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         effective_session_key,
         effort_applied_note,
         effort_drop_reason,
+        effort_pending_note,
         internal_memory_scope,
         parent_spawn_allowlists,
         parent_work_supported,
@@ -417,6 +418,7 @@ async def api_spawn(request: web.Request) -> web.Response:
             selection = None
 
         def _effort_verdict() -> tuple[str, str]:
+            """The receipt field for this request's effort and its text, or ``("", "")``."""
             if (
                 not isinstance(selection, tuple)
                 or len(selection) != 2
@@ -428,23 +430,25 @@ async def api_spawn(request: web.Request) -> web.Response:
             kind, verdict_agent = selection
             claim = verdict_agent if kind == "member" else ""
             # Judged on the backend the run starts on, not the gateway default.
-            d = effort_drop_reason(
-                model, reasoning_effort, verdict_agent, crew_agent=claim, backend=backend
-            )
-            if d:
-                return d, ""
-            return "", effort_applied_note(
-                model, reasoning_effort, verdict_agent, crew_agent=claim, backend=backend
-            )
+            # At most one of the three is non-empty for a requested effort.
+            for field, verdict in (
+                ("effort_dropped", effort_drop_reason),
+                ("effort_applied", effort_applied_note),
+                ("effort_pending", effort_pending_note),
+            ):
+                text = verdict(
+                    model, reasoning_effort, verdict_agent, crew_agent=claim, backend=backend
+                )
+                if text:
+                    return field, text
+            return "", ""
 
         # The resolvers read config and glob ~/.kiro/agents — file I/O that
         # must not run on the gateway event loop (the same reason
         # get_or_create runs _session_model in an executor).
-        drop, applied = await asyncio.to_thread(_effort_verdict)
-        if drop:
-            resp["effort_dropped"] = drop
-        elif applied:
-            resp["effort_applied"] = applied
+        field, text = await asyncio.to_thread(_effort_verdict)
+        if field:
+            resp[field] = text
     if keep:
         # The conversation id is the FIRST run's id: spawn_continue targets it.
         resp["conversation"] = info.id

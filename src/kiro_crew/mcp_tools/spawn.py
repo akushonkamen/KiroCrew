@@ -800,6 +800,9 @@ def spawn_run(name: str, args: dict[str, Any]) -> str:
     # (subagent id, note) pairs for the delivery mirror: the resolved model and
     # the family settings key a requested effort is delivered under.
     effort_applies: list[tuple[str, tuple[str, str]]] = []
+    # (subagent id, note) pairs for a level only session start can judge: with
+    # no model pinned the provider binds it to the model the backend serves.
+    effort_pendings: list[tuple[str, tuple[str, str]]] = []
     agent_tasks: list[str] = []
     # subagent id -> the gate's reason, for members the gateway accepted but
     # answered ``status: "queued"`` (deferred, not started).
@@ -936,6 +939,8 @@ def spawn_run(name: str, args: dict[str, Any]) -> str:
             effort_drops.append((str(d.get("id", "?")), (t_effort, str(d["effort_dropped"]))))
         if d.get("effort_applied"):
             effort_applies.append((str(d.get("id", "?")), (t_effort, str(d["effort_applied"]))))
+        if d.get("effort_pending"):
+            effort_pendings.append((str(d.get("id", "?")), (t_effort, str(d["effort_pending"]))))
 
     spawn_lines: list[str] = []
     # Server-computed effort verdicts (never a rejection — gated on agent_ids
@@ -954,6 +959,9 @@ def spawn_run(name: str, args: dict[str, Any]) -> str:
             spawn_lines.append(
                 f"✓ reasoning_effort='{lvl}' applied for {applied_ids} ({applied_note})"
             )
+        # Neither a ✓ nor "dropped": the outcome is decided after this result.
+        for pending_ids, (lvl, pending_note) in _collapse_effort_verdicts(effort_pendings):
+            spawn_lines.append(f"ℹ reasoning_effort='{lvl}' for {pending_ids}: {pending_note}")
     if not parent_session and agent_ids:
         # Orphan alert: without a parent session key the subagents cannot
         # deliver completion events back to this conversation and will

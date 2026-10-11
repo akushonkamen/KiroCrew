@@ -784,6 +784,7 @@ def _chat_state(runner: MagicMock | None) -> SimpleNamespace:
     state = SimpleNamespace(
         task_runner=runner,
         _background_tasks=set(),
+        get_slot=MagicMock(return_value=None),
         get_or_create_slot=MagicMock(return_value=slot),
         push_slots_update=MagicMock(),
     )

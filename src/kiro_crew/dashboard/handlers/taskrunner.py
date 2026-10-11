@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -56,10 +57,19 @@ def _canonical_task_reference(runner: TaskRunner, reference: str, *, first: bool
     return matches[0 if first else -1].task_id if matches else reference
 
 
-async def _task_result_slot(request: web.Request, state: DashboardState, task_id: str):
-    """Continue the owning project's exact execution in a fresh chat session."""
-    run = state.task_runner._runs.get(task_id) if state.task_runner else None
-    execution = run.execution_context if run else None
+#: ``DashboardState`` attribute mapping a run completion to the key of the chat slot
+#: opened for it, or to an ``asyncio.Event`` while that slot is being opened.
+_RESULT_SLOTS_ATTR = "_task_result_slots"
+_RESULT_SLOTS_MAX = 512
+
+
+def _completion_identity(run, branch: str) -> tuple[str, float, float, str]:
+    """One run attempt's completion: a retry stamps new start and finish times."""
+    return (run.task_id, run.started_at, run.finished_at, branch)
+
+
+async def _open_result_slot(state: DashboardState, task_id: str, execution):
+    """A new slot continuing the run's exact execution, or a plain chat without one."""
     if execution is None:
         return state.get_or_create_slot()
     token = uuid.uuid4().hex
@@ -77,6 +87,45 @@ async def _task_result_slot(request: web.Request, state: DashboardState, task_id
     slot.agent = execution.selection_name or execution.template_id
     slot._app = execution.app
     return slot
+
+
+async def _task_result_slot(request: web.Request, state: DashboardState, task_id: str, branch: str):
+    """The chat slot continuing one completion of *task_id*, and whether it is new.
+
+    A completion (the run's start and finish times) opens one slot per *branch*,
+    ``plan`` or ``review``. While that slot is open every call returns it with
+    ``False``, so a repeated click lands on the conversation already working in the
+    run's directory instead of starting a second agent there. A retry's new times
+    open a new slot, and so does a call after the slot was closed.
+    """
+    run = state.task_runner._runs.get(task_id) if state.task_runner else None
+    if run is None:
+        return state.get_or_create_slot(), True
+    slots = getattr(state, _RESULT_SLOTS_ATTR, None)
+    if slots is None:
+        slots = OrderedDict()
+        setattr(state, _RESULT_SLOTS_ATTR, slots)
+    identity = _completion_identity(run, branch)
+    while isinstance(entry := slots.get(identity), asyncio.Event):
+        # Another call is opening this completion's slot; its outcome decides this one.
+        await entry.wait()
+    live = state.get_slot(entry) if entry else None
+    if live is not None:
+        return live, False
+    opening = asyncio.Event()
+    slots[identity] = opening
+    try:
+        slot = await _open_result_slot(state, task_id, run.execution_context)
+        slots[identity] = slot.key
+    except BaseException:
+        slots.pop(identity, None)
+        raise
+    finally:
+        opening.set()
+    slots.move_to_end(identity)
+    while len(slots) > _RESULT_SLOTS_MAX:
+        slots.popitem(last=False)
+    return slot, True
 
 
 def _sel():
@@ -753,7 +802,9 @@ async def api_taskrunner_to_chat(request: web.Request) -> web.Response:
     # Handle planned runs — send to chat for optimization
     if run.status == "planned":
         summary = state.task_runner.plan_to_chat_context(task_id)
-        slot = await _task_result_slot(request, state, task_id)
+        slot, fresh = await _task_result_slot(request, state, task_id, "plan")
+        if not fresh:
+            return web.json_response({"ok": True, "slot": slot.key, "task_id": task_id})
         slot.title = f"Plan: {run.task_id}"
         slot.append("user", summary, "msg msg-u")
         from kiro_crew.dashboard.chat import _run_chat  # noqa: F811
@@ -826,7 +877,10 @@ async def api_taskrunner_to_chat(request: web.Request) -> web.Response:
         )
     summary = "\n".join(lines)
 
-    slot = await _task_result_slot(request, state, task_id)
+    slot, fresh = await _task_result_slot(request, state, task_id, "review")
+    if not fresh:
+        # The open review tab already holds this summary and its turn.
+        return web.json_response({"ok": True, "slot": slot.key})
     slot.title = f"Review: {spec_name}"
     slot.append("user", summary, "msg msg-u")
 

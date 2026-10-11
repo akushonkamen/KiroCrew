@@ -114,6 +114,7 @@ from kiro_crew.acp.liveness import (
 )
 from kiro_crew.acp.mcp_ref_guard import warn_unresolved_server_refs
 from kiro_crew.acp.mcp_session_report import McpSessionReport
+from kiro_crew.acp.mcp_startable import PrunedServer, prune_unstartable
 from kiro_crew.acp.prompt_blocks import build_prompt_blocks
 from kiro_crew.acp.runtime_models import (
     DEFAULT_MODEL,
@@ -169,6 +170,7 @@ from kiro_crew.acp.types import (
     ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS,
     ACP_BACKENDS_MODEL_VIA_CONFIG_OPTION,
     ACP_BACKENDS_POD_HOME_REMAP,
+    ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP,
     ACP_BACKENDS_RESUME_WITHOUT_LOAD,
     ACP_BACKENDS_SEED_LOCAL_SETTINGS,
     ACP_BACKENDS_SESSION_MCP_ARRAY,
@@ -2083,6 +2085,9 @@ class AcpClient:
         #: session attempt and must not reach the report. See
         #: ``_begin_session_report``.
         self._mcp_report_frame_floor = 0
+        #: Elements the last array build left out as unstartable, recorded on the
+        #: report by ``_begin_session_report``. See ``_prune_unstartable_mcp``.
+        self._mcp_pruned: tuple[PrunedServer, ...] = ()
         # MCP OAuth requests collected during session init from
         # `_kiro.dev/mcp/oauth_request` notifications. Drained by callers via
         # `pop_pending_oauth_requests()` after `ensure_ready()` so the UI can
@@ -7004,6 +7009,7 @@ class AcpClient:
                 *(await asyncio.to_thread(self._pooled_mcp_servers)),
             ],
         }
+        new_params["mcpServers"] = await self._prune_unstartable_mcp(new_params["mcpServers"])
         if self._is_claude:
             new_params["_meta"] = self._claude_session_meta()
 
@@ -7071,6 +7077,7 @@ class AcpClient:
                 *(self._goose_session_mcp_servers() if self._is_goose else []),
                 *(await asyncio.to_thread(self._pooled_mcp_servers)),
             ]
+            new_params["mcpServers"] = await self._prune_unstartable_mcp(new_params["mcpServers"])
             # Rebuilt AFTER the array, from the same re-seed: the envelope carries
             # the setting sources the array was authorized under and the inline
             # settings naming the substitute model.
@@ -7225,6 +7232,9 @@ class AcpClient:
                             *(await asyncio.to_thread(self._pooled_mcp_servers)),
                         ],
                     }
+                    load_params["mcpServers"] = await self._prune_unstartable_mcp(
+                        load_params["mcpServers"]
+                    )
                     if self._is_claude:
                         load_params["_meta"] = self._claude_session_meta()
                     elif self.backend not in ACP_BACKENDS_HARNESS_OWNED_SESSIONS:
@@ -8375,6 +8385,37 @@ class AcpClient:
         """
         self._mcp_report_frame_floor = len(self._mcp_notifications)
         self._mcp_report.begin_session(servers)
+        # AFTER the clear: a server the array build left out is this attempt's own
+        # failure, and recording it first would erase it.
+        pruned, self._mcp_pruned = getattr(self, "_mcp_pruned", ()), ()
+        for server in pruned:
+            self._mcp_report.record_pruned(server.name, server.reason)
+
+    async def _prune_unstartable_mcp(self, servers: list[Any]) -> list[Any]:
+        """*servers* without the stdio elements whose command certainly cannot start.
+
+        Only for ``ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP``, where such an element is
+        otherwise lost without a word (goose) or takes the whole session with it
+        (deepseek). The set check comes first and returns the list untouched, so the
+        kiro path gains no scheduling point (harness-parity H13). The stats run off
+        the loop. Each pruned server is warned about here and recorded on the MCP
+        report as failed by :meth:`_begin_session_report`, which every array build
+        reaches before its request is sent.
+        """
+        self._mcp_pruned = ()
+        if self.backend not in ACP_BACKENDS_PRUNE_UNSTARTABLE_MCP:
+            return servers
+        kept, pruned = await asyncio.to_thread(prune_unstartable, servers)
+        for server in pruned:
+            logger.warning(
+                "%s session MCP: leaving server %r out of this session -- %s. The "
+                "session starts without it; fix its command to get its tools back",
+                self.backend,
+                server.name,
+                server.reason,
+            )
+        self._mcp_pruned = tuple(pruned)
+        return kept
 
     def mcp_session_report(self) -> McpSessionReport:
         """This session's MCP registration report (see ``mcp_session_report``).

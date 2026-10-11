@@ -565,6 +565,22 @@ class McpSessionReport:
                 seen.append(ref)
         self.unresolved_refs = tuple(seen[:_BUCKET_CAP])
 
+    def record_pruned(self, name: Any, reason: Any) -> bool:
+        """Record a server Crew left out of this session's array before sending it.
+
+        It lands in the FAILED bucket with *reason*, because that is what it is to
+        the reader: a server this session cannot use, whose startup needs fixing.
+        Sanitized and capped like a frame's name and error. Call it after
+        :meth:`begin_session`, which clears the buckets. Returns True when the
+        report changed.
+        """
+        clean = sanitize_sink_text(str(name or ""), _NAME_CAP)
+        if not clean:
+            return False
+        return self._record(
+            _ACTION_INIT_FAILURE, clean, sanitize_sink_text(str(reason or ""), _ERROR_CAP)
+        )
+
     def record_no_tools(self, names: Any) -> bool:
         """Record the servers that started but gave this session no tool.
 

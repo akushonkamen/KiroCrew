@@ -4167,10 +4167,15 @@
     },
     "kiroSignInNotice": {
       "sign_in_expired": "Kiro sign-in expired",
-      "open_sign_in": "Sign in again in Settings",
+      "open_sign_in": "Open sign-in settings",
       "expired_detail": "Agents cannot run until you sign in again. The stored sign-in expired and cannot be renewed.",
       "refused_title": "Kiro refused to renew your sign-in",
-      "refused_detail": "Agents will stop when this sign-in expires. Sign in again to keep them running."
+      "refused_detail": "Agents will stop when this sign-in expires. Sign in again to keep them running.",
+      "refused_expired_detail": "Agents cannot run until you sign in again. This sign-in has already expired.",
+      "status_unavailable_detail": "Open sign-in settings to check your Kiro sign-in, or ask the agent to look into it.",
+      "config_unavailable": "Could not read the dashboard settings",
+      "config_unavailable_detail": "Reload the page to try again, or ask the agent to look into it.",
+      "load_failed": "Part of the dashboard could not load. Reload the page to try again."
     }
   },
   "hooks": {

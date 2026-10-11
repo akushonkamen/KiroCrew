@@ -9898,10 +9898,15 @@
     },
     "kiroSignInNotice": {
       "sign_in_expired": "Login do Kiro expirado",
-      "open_sign_in": "Entrar novamente nas Configurações",
+      "open_sign_in": "Abrir configurações de login",
       "expired_detail": "Os agentes não podem ser executados até você entrar novamente. O login salvo expirou e não pode ser renovado.",
       "refused_title": "O Kiro recusou renovar seu login",
-      "refused_detail": "Os agentes param de ser executados quando este login expirar. Entre novamente para mantê-los em execução."
+      "refused_detail": "Os agentes param de ser executados quando este login expirar. Entre novamente para mantê-los em execução.",
+      "refused_expired_detail": "Os agentes não podem ser executados até você entrar novamente. Este login já expirou.",
+      "status_unavailable_detail": "Abra as configurações de login para verificar seu login no Kiro ou peça ao agente para investigar.",
+      "config_unavailable": "Não foi possível ler as configurações do painel",
+      "config_unavailable_detail": "Recarregue a página para tentar novamente ou peça ao agente para verificar.",
+      "load_failed": "Não foi possível carregar uma parte do painel. Recarregue a página para tentar novamente."
     }
   },
   "hooks": {

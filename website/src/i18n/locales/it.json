@@ -9898,10 +9898,15 @@
     },
     "kiroSignInNotice": {
       "sign_in_expired": "Accesso a Kiro scaduto",
-      "open_sign_in": "Accedi di nuovo nelle Impostazioni",
+      "open_sign_in": "Apri le impostazioni di accesso",
       "expired_detail": "Gli agenti non possono essere eseguiti finché non accedi di nuovo. L’accesso salvato è scaduto e non può essere rinnovato.",
       "refused_title": "Kiro ha rifiutato di rinnovare il tuo accesso",
-      "refused_detail": "Gli agenti si fermeranno alla scadenza di questo accesso. Accedi di nuovo perché continuino a funzionare."
+      "refused_detail": "Gli agenti si fermeranno alla scadenza di questo accesso. Accedi di nuovo perché continuino a funzionare.",
+      "refused_expired_detail": "Gli agenti non possono essere eseguiti finché non accedi di nuovo. Questo accesso è già scaduto.",
+      "status_unavailable_detail": "Apri le impostazioni di accesso per controllare il tuo accesso a Kiro, oppure chiedi all’agente di verificare.",
+      "config_unavailable": "Impossibile leggere le impostazioni della dashboard",
+      "config_unavailable_detail": "Ricarica la pagina per riprovare, oppure chiedi all’agente di verificare.",
+      "load_failed": "Non è stato possibile caricare una parte della dashboard. Ricarica la pagina per riprovare."
     }
   },
   "hooks": {

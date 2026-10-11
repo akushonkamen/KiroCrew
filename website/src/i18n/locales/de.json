@@ -9767,10 +9767,15 @@
     },
     "kiroSignInNotice": {
       "sign_in_expired": "Kiro-Anmeldung abgelaufen",
-      "open_sign_in": "In den Einstellungen erneut anmelden",
+      "open_sign_in": "Anmeldeeinstellungen öffnen",
       "expired_detail": "Agenten können erst wieder laufen, wenn du dich erneut anmeldest. Die gespeicherte Anmeldung ist abgelaufen und kann nicht erneuert werden.",
       "refused_title": "Kiro hat die Erneuerung deiner Anmeldung abgelehnt",
-      "refused_detail": "Agenten hören auf zu laufen, sobald diese Anmeldung abläuft. Melde dich erneut an, damit sie weiterlaufen."
+      "refused_detail": "Agenten hören auf zu laufen, sobald diese Anmeldung abläuft. Melde dich erneut an, damit sie weiterlaufen.",
+      "refused_expired_detail": "Agenten können erst wieder laufen, wenn du dich erneut anmeldest. Diese Anmeldung ist bereits abgelaufen.",
+      "status_unavailable_detail": "Öffne die Anmeldeeinstellungen, um deine Kiro-Anmeldung zu prüfen, oder bitte den Agenten, sich das anzusehen.",
+      "config_unavailable": "Die Dashboard-Einstellungen konnten nicht gelesen werden",
+      "config_unavailable_detail": "Lade die Seite neu, um es erneut zu versuchen, oder bitte den Agenten, sich das anzusehen.",
+      "load_failed": "Ein Teil des Dashboards konnte nicht geladen werden. Lade die Seite neu, um es erneut zu versuchen."
     }
   },
   "hooks": {

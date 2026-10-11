@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, X } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 
 import { api } from '../api/client'
 import type { AcpBackendConfig } from '../api/acpBackend'
 import { i18nT } from '../i18n/t'
+import { useAppSelector } from '../store'
 import ErrorNotice from './ErrorNotice'
+import { reportForError } from '../utils/errorReport'
 import { useGuardedLeave } from './NavigationLeaveGuard'
 import { Btn } from './ui'
 import { settingsPath } from './settingsPath'
@@ -42,25 +44,32 @@ export const KIRO_SIGN_IN_NOTICE_POLL_MS = 60_000
  * folding to an icon.
  *
  * What it shows, all hidden on Settings > Agent Harness itself (the card shows
- * every one of these states next to its own controls):
- * - The config read or the status read FAILED: an `ErrorNotice` with the
- *   agent hand-off. The config read decides whether KAS runs the agents at
- *   all, so its failure leaves the sign-in unchecked just as the status
- *   read's does.
+ * every one of these states next to its own controls). Every shape is an
+ * `ErrorNotice` with the agent hand-off and dismiss, at the same weight:
+ * - The config read FAILED before any good read: nothing says which backend
+ *   runs the agents, so the sign-in check cannot start. Its own title says
+ *   the settings could not be read and makes no sign-in claim (kiro-cli and
+ *   Claude have no Kiro sign-in), with no sign-in button. A failure after a
+ *   good read shows nothing: the query keeps that read's backend.
+ * - The status read FAILED on a KAS gateway: a plain-language line saying
+ *   what to do, the sign-in button, and the hand-off, which carries the
+ *   server's error.
  * - Kiro REFUSED to renew the stored sign-in (`refresh_rejected`, recorded by
- *   the renewal tick when the issuer answers no): that is a failed request, so
- *   it is an `ErrorNotice` too, with the way to fix it in its footer.
- * - The stored sign-in EXPIRED with nothing to renew it with: a state, not a
- *   failure, so a `role="status"` notice with the same button.
+ *   the renewal tick when the issuer answers no). Once the access token is
+ *   also `expired` (the usual case: the tick only asks inside the refresh
+ *   margin) it says the agents cannot run, not that they will stop.
+ * - The stored sign-in EXPIRED with nothing to renew it with: every agent's
+ *   credential request is now refused, the same outcome as a refusal.
  * Nothing at all while KAS is not the selected backend (the one backend that
  * runs agents as this identity), with no stored sign-in, or while it works. A
  * gateway on another backend never reads the status.
  *
- * The hand-offs: the notice holds no input, and both the hand-off and the
- * sign-in button ask the page's leave guard before navigating, so a draft on
- * the page below is not lost. The dashboard's own agent is reachable whatever
- * this read says (the sign-in card makes the same call for a failed status
- * read, in KasLoginGate).
+ * The lapsed and status-failure shapes carry the "Open sign-in settings"
+ * button in their footer: signing in again is the fix the user can make.
+ *
+ * The hand-offs: the notice holds no input, and both the agent hand-off and
+ * the sign-in button ask the page's leave guard before navigating, so a draft
+ * on the page below is not lost.
  *
  * The sign-in button opens the card rather than starting a sign-in: the card
  * is where the provider is chosen, and a one-click browser sign-in from a
@@ -80,6 +89,23 @@ export default function KiroSignInNotice() {
     queryFn: () => api.kirocrewConfig(),
   })
   const kas = cfgQuery.data?.agent?.acp_backend === KIRO_SIGN_IN_BACKEND
+  // The shell's own outage surfaces: the offline capsule, and the banner that
+  // asks for a token. Same event pair App.tsx subscribes to, seeded from the
+  // banner element (as in KiroPrerequisiteGate) rather than from api/client.
+  const connected = useAppSelector(s => s.dashboard.connected)
+  const [authRequired, setAuthRequired] = useState<boolean>(
+    () => typeof document !== 'undefined' && document.getElementById('mc-session-expired') !== null,
+  )
+  useEffect(() => {
+    const onRequired = () => setAuthRequired(true)
+    const onCleared = () => setAuthRequired(false)
+    window.addEventListener('mc-auth-required', onRequired)
+    window.addEventListener('mc-auth-cleared', onCleared)
+    return () => {
+      window.removeEventListener('mc-auth-required', onRequired)
+      window.removeEventListener('mc-auth-cleared', onCleared)
+    }
+  }, [])
   const statusQuery = useQuery({
     queryKey: STATUS_QUERY_KEY,
     queryFn: api.kasLoginStatus,
@@ -88,35 +114,6 @@ export default function KiroSignInNotice() {
   })
 
   if (pathname === settingsPath({ tab: AGENT_HARNESS_SETTINGS_TAB })) return null
-
-  const failedRead = cfgQuery.isError
-    ? { key: `config:${cfgQuery.dataUpdatedAt}`, error: cfgQuery.error }
-    : kas && statusQuery.isError
-      ? { key: `status:${statusQuery.dataUpdatedAt}`, error: statusQuery.error }
-      : null
-  if (failedRead) {
-    if (dismissedFailure === failedRead.key) return null
-    const title = i18nT('components.kasLogin.sign_in_status_unavailable')
-    return (
-      <ErrorNotice
-        className="mx-3 md:mx-6 mt-4 mb-2"
-        title={title}
-        // The server's text is the journal key the hand-off recovers the
-        // endpoint and status from, so it stays, as the secondary line.
-        message={failedRead.error.message || title}
-        messagePlacement="below"
-        actionPlacement="below"
-        askAgent
-        onDismiss={() => setDismissedFailure(failedRead.key)}
-        testId="kiro-sign-in-status-error"
-      />
-    )
-  }
-
-  const status = statusQuery.data
-  if (!kas || !status?.authenticated || !signInLapsed(status)) return null
-  const cause = status.refresh_rejected ? 'refresh_rejected' : 'expired'
-  if (dismissedCause === cause) return null
 
   const openSignIn = (
     <Btn
@@ -130,49 +127,99 @@ export default function KiroSignInNotice() {
     </Btn>
   )
 
-  if (cause === 'refresh_rejected') {
+  // A config read that failed before any good one: nothing says which backend
+  // runs the agents, so the sign-in check cannot start. That is shown, under
+  // its own title and with no sign-in claim (on kiro-cli or Claude there is no
+  // Kiro sign-in to report). After a good read the query keeps that read's
+  // data, so `kas` still holds, the status read goes on, and nothing is lost.
+  // While the gateway is offline or asks for a token, those surfaces already
+  // say why the read failed and what fixes it, so this one stays out of their
+  // way rather than pointing at a reload.
+  if (cfgQuery.isError && !cfgQuery.data) {
+    if (!connected || authRequired) return null
+    // Not re-shown on a later failed retry: dismissed is dismissed until a
+    // reload, and a good read ends this branch for good.
+    if (dismissedFailure === 'config') return null
     return (
       <ErrorNotice
         className="mx-3 md:mx-6 mt-4 mb-2"
-        title={i18nT('components.kiroSignInNotice.refused_title')}
-        message={i18nT('components.kiroSignInNotice.refused_detail')}
+        title={i18nT('components.kiroSignInNotice.config_unavailable')}
+        message={i18nT('components.kiroSignInNotice.config_unavailable_detail')}
+        report={reportForError(cfgQuery.error)}
         messagePlacement="below"
         actionPlacement="below"
-        footer={<div className="mt-1.5">{openSignIn}</div>}
         askAgent
-        onDismiss={() => setDismissedCause(cause)}
-        testId="kiro-sign-in-refused"
+        onDismiss={() => setDismissedFailure('config')}
+        testId="kiro-sign-in-config-error"
       />
     )
   }
 
-  const dismissName = i18nT('components.errorNotice.dismiss')
-  // Two controls: the way to fix it, and dismiss. The group may take a line of
-  // its own below the text, and its button label wraps rather than pushing the
-  // dismiss out of a 320px column.
+  // The status read's failure, on KAS only (the only backend that reads it).
+  const failedRead = kas && statusQuery.isError
+    ? { key: `status:${statusQuery.dataUpdatedAt}`, error: statusQuery.error }
+    : null
+  if (failedRead) {
+    if (dismissedFailure === failedRead.key) return null
+    return (
+      <ErrorNotice
+        className="mx-3 md:mx-6 mt-4 mb-2"
+        title={i18nT('components.kasLogin.sign_in_status_unavailable')}
+        // What to do, in words: the server's text ("token_store_failed: ...")
+        // is no instruction. The hand-off still gets it, with the endpoint and
+        // status, from the report the transport pinned to this rejection.
+        message={i18nT('components.kiroSignInNotice.status_unavailable_detail')}
+        report={reportForError(failedRead.error)}
+        messagePlacement="below"
+        actionPlacement="below"
+        // The way to fix it yourself: the sign-in card shows the same read
+        // with its own controls, and this notice is hidden there.
+        footer={<div className="mt-1.5">{openSignIn}</div>}
+        askAgent
+        onDismiss={() => setDismissedFailure(failedRead.key)}
+        testId="kiro-sign-in-status-error"
+      />
+    )
+  }
+
+  const status = statusQuery.data
+  if (!kas || !status?.authenticated || !signInLapsed(status)) return null
+  // A refusal that has since expired is its own cause: "the agents have
+  // stopped" is new information after a dismissed "they will stop".
+  const cause = status.refresh_rejected
+    ? (status.expired ? 'refresh_rejected_expired' : 'refresh_rejected')
+    : 'expired'
+  if (dismissedCause === cause) return null
+
+  // Both lapsed states render the same way, at the same weight: in each the
+  // agents' credential requests are now refused (or will be), and only signing
+  // in again fixes it. An expiry with nothing to renew it is that failure as
+  // much as an issuer's refusal is, so it is not dressed down to a warning --
+  // a yellow "agents cannot run" under a red "will stop" read backwards.
+  // The text says which one happened.
+  let title = i18nT('components.kiroSignInNotice.sign_in_expired')
+  let detail = i18nT('components.kiroSignInNotice.expired_detail')
+  if (cause !== 'expired') {
+    // The renewal tick only asks Kiro inside the refresh margin, so by the time
+    // a refusal is recorded the access token is usually `expired` too: the
+    // agents have already stopped, and "will stop" would be wrong. `usable`
+    // cannot tell the two apart (a stored refresh token keeps it true).
+    title = i18nT('components.kiroSignInNotice.refused_title')
+    detail = cause === 'refresh_rejected_expired'
+      ? i18nT('components.kiroSignInNotice.refused_expired_detail')
+      : i18nT('components.kiroSignInNotice.refused_detail')
+  }
   return (
-    <div
-      role="status"
-      data-testid="kiro-sign-in-notice"
-      className="mx-3 md:mx-6 mt-4 mb-2 bg-warn/10 border border-warn/30 rounded-lg p-3 flex flex-wrap items-center gap-x-3 gap-y-2 animate-rise"
-    >
-      <AlertTriangle size={16} className="text-warn shrink-0" aria-hidden="true" />
-      <div className="flex-1 basis-56 min-w-0 text-[13px]">
-        <div className="font-medium text-text">{i18nT('components.kiroSignInNotice.sign_in_expired')}</div>
-        <div className="text-muted mt-0.5">{i18nT('components.kiroSignInNotice.expired_detail')}</div>
-      </div>
-      <div className="flex items-center gap-2 min-w-0 max-w-full">
-        {openSignIn}
-        <button
-          type="button"
-          onClick={() => setDismissedCause(cause)}
-          aria-label={dismissName}
-          title={dismissName}
-          className="shrink-0 text-muted hover:text-text p-1 rounded cursor-pointer bg-transparent border-none"
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </div>
-    </div>
+    <ErrorNotice
+      className="mx-3 md:mx-6 mt-4 mb-2"
+      title={title}
+      message={detail}
+      messagePlacement="below"
+      actionPlacement="below"
+      footer={<div className="mt-1.5">{openSignIn}</div>}
+      askAgent
+      onDismiss={() => setDismissedCause(cause)}
+      testId={cause === 'expired' ? 'kiro-sign-in-notice' : 'kiro-sign-in-refused'}
+    />
   )
 }

@@ -10,14 +10,16 @@
  * Each frame ASSERTS the notice's state before it writes the PNG, so a stale
  * bundle fails loudly instead of producing a plausible picture:
  *
- *   01 expired, dark, chat page        -> status notice, two controls
+ *   01 expired, dark, chat page        -> ErrorNotice, three controls
  *   02 refused, light, schedule page   -> ErrorNotice under its own title
  *   03 healthy, dark                   -> no notice
- *   04 click "Sign in again in Settings" -> lands on Settings > Agent Harness,
+ *   04 click "Open sign-in settings"   -> lands on Settings > Agent Harness,
  *                                         where the notice is not shown
  *   05/06 phone width (390px)          -> the full notice, text and button
  *   07 status read fails (HTTP 500)    -> ErrorNotice with the agent hand-off
+ *                                         and the sign-in button
  *   08 320px, Spanish                  -> label wraps, dismiss stays in view
+ *   09 refused and expired, light      -> says the agents cannot run
  *
  * `--before` captures the expired state against a build WITHOUT the notice
  * (pass that build with `--dist`) and asserts it is absent there.
@@ -50,6 +52,7 @@ const HEALTHY = {
 }
 const EXPIRED = { ...HEALTHY, expires_at: '2000-01-01T00:00:00Z', expired: true, has_refresh_token: false, usable: false }
 const REFUSED = { ...HEALTHY, refresh_rejected: true }
+const REFUSED_EXPIRED = { ...REFUSED, expires_at: '2000-01-01T00:00:00Z', expired: true }
 const FAILED = Symbol('status read fails')
 const NOW_ISO = new Date(Date.now() - 60_000).toISOString()
 const SLOT = { key: 'chat-1', title: 'Release notes draft', messages: 4, running: false, agent: '', mode: '', tags: [], last_ts: NOW_ISO, last_turn_ts: NOW_ISO }
@@ -66,12 +69,26 @@ async function main() {
   const browser = await chromium.launch()
   const results = []
 
-  async function frame(name, { status, theme = 'dark', want, click = false, width = 1280, route = '/', lang = null }) {
-    const context = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2 })
+  async function frame(name, { status, config = KAS_CONFIG, theme = 'dark', want, click = false, width = 1280, route = '/', lang = null, breakNotice = false }) {
+    // The service worker serves the chunks, and page routes do not see what it
+    // fetches, so the broken-chunk frame runs without it.
+    const context = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2, serviceWorkers: breakNotice ? 'block' : 'allow' })
     const page = await context.newPage()
     logPageProblems(page)
+    // The notice's own chunk fails to load after the shell's preload-error
+    // reloads have run out (their count is already at the cap), so the
+    // notice's error boundary draws its fallback.
+    if (breakNotice) {
+      await page.addInitScript(() => { sessionStorage.setItem('vite-preload-reload-count', '3') })
+      await page.route(/\/KiroSignInNotice-[^/]*\.js(\?.*)?$/, r => r.abort())
+    }
     const extra = async (path, route) => {
-      if (path === '/api/config/kirocrew') { await json(route, KAS_CONFIG); return true }
+      if (path === '/api/config/kirocrew') {
+        // A failed config read answers the way a broken config store does.
+        if (config === FAILED) await json(route, { error: 'config_read_failed: the config store could not be read', code: 'config_read_failed' }, 500)
+        else await json(route, config)
+        return true
+      }
       if (path === '/api/kas-login') {
         // A failed read answers the way the handler does when the store cannot be opened.
         if (status === FAILED) await json(route, { error: 'token_store_failed: the sign-in store could not be read', code: 'token_store_failed' }, 500)
@@ -128,6 +145,7 @@ async function main() {
       ? got === null
       : !!got && got.visible && got.text.startsWith(want.title) && got.buttons === want.buttons
         && got.open === want.open && got.dismissInside
+        && (!want.detail || got.text.includes(want.detail))
     const row = { name, ok, notice: got }
 
     if (!VERIFY_ONLY) {
@@ -152,12 +170,16 @@ async function main() {
     await context.close()
   }
 
-  // The refused renewal is an ErrorNotice: the hand-off and dismiss on its
-  // first row, the sign-in button on its own row below.
-  const expired = { title: 'Kiro sign-in expired', buttons: 2, open: true }
-  const refused = { testId: 'kiro-sign-in-refused', title: 'Kiro refused to renew your sign-in', buttons: 3, open: true }
-  const failed = { testId: 'kiro-sign-in-status-error', title: 'We could not check sign-in status', buttons: 2, open: false }
-  const expiredEs = { title: 'Inicio de sesión en Kiro caducado', buttons: 2, open: true, dismissName: 'Descartar' }
+  // Every shape is an ErrorNotice: the hand-off and dismiss on its first row,
+  // the sign-in button on its own row below.
+  const expired = { title: 'Kiro sign-in expired', buttons: 3, open: true }
+  const refused = { testId: 'kiro-sign-in-refused', title: 'Kiro refused to renew your sign-in', buttons: 3, open: true, detail: 'Agents will stop when this sign-in expires' }
+  const refusedExpired = { ...refused, detail: 'Agents cannot run until you sign in again. This sign-in has already expired.' }
+  const failed = { testId: 'kiro-sign-in-status-error', title: 'We could not check sign-in status', buttons: 3, open: true, detail: 'Open sign-in settings to check your Kiro sign-in' }
+  // No sign-in button: the backend is unknown, and kiro-cli or Claude has no sign-in.
+  const configFailed = { testId: 'kiro-sign-in-config-error', title: 'Could not read the dashboard settings', buttons: 2, open: false, detail: 'Reload the page to try again' }
+  const loadFailed = { testId: 'kiro-sign-in-notice-load-error', title: 'Part of the dashboard could not load', buttons: 2, open: false }
+  const expiredEs = { title: 'Inicio de sesión en Kiro caducado', buttons: 3, open: true, dismissName: 'Descartar' }
   if (BEFORE) {
     await frame('00-before-expired-dark', { status: EXPIRED, want: null })
   } else {
@@ -171,6 +193,13 @@ async function main() {
     // The narrowest supported width in a long locale: the button label wraps
     // and the dismiss stays inside the window.
     await frame('08-320-spanish-expired-dark', { status: EXPIRED, width: 320, route: '/schedule', lang: 'es', want: expiredEs })
+    // The usual refusal: recorded inside the refresh margin, so already expired.
+    await frame('09-refused-expired-light', { status: REFUSED_EXPIRED, theme: 'light', route: '/schedule', want: refusedExpired })
+    await frame('10-config-read-failed-dark', { status: EXPIRED, config: FAILED, want: configFailed })
+    await frame('11-320-status-read-failed-light', { status: FAILED, theme: 'light', width: 320, route: '/schedule', want: failed })
+    await frame('12-320-refused-expired-dark', { status: REFUSED_EXPIRED, width: 320, want: refusedExpired })
+    await frame('13-expired-light', { status: EXPIRED, theme: 'light', route: '/schedule', want: expired })
+    await frame('14-notice-load-failed-dark', { status: EXPIRED, breakNotice: true, want: loadFailed })
   }
 
   await browser.close()

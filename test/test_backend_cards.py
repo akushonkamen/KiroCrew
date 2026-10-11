@@ -362,7 +362,7 @@ def test_core_counts_per_harness_are_pinned() -> None:
     assert counts == {
         "claude": 5,
         "codex": 6,
-        "deepseek": 3,
+        "deepseek": 4,
         "goose": 4,
         "kas": 7,
         "kiro": 6,

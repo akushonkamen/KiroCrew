@@ -183,7 +183,7 @@ Read it by tier. `core` rows are the card, and the last row is each harness's co
 | Capability | Tier | Decided by | claude | codex | deepseek | goose | kas | kiro | opencode | pi |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `crew_tools` | core | `SESSION_MCP_ARRAY` ∪ `KIRO_SLASH_COMMANDS` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · |
-| `member_thread_tools` | core | `MEMBER_DISPATCH` | ✓ | ✓ | · | ✓ | ✓ | · | ✓ | · |
+| `member_thread_tools` | core | `MEMBER_DISPATCH` | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | · |
 | `side_chat_tools` | core | `SIDE_READONLY` | · | · | · | · | ✓ | ✓ | · | · |
 | `mid_turn_steer` | core | `STEER` ∪ `STEERING_REQUEST` | · | ✓ | · | · | ✓ | ✓ | · | · |
 | `manual_compact` | core | `COMPACT` | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ? |
@@ -211,8 +211,9 @@ Read it by tier. `core` rows are the card, and the last row is each harness's co
 | `ACP_BACKENDS_INDEPENDENT_SETUP` | internal | - | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ |
 | `ACP_BACKENDS_INLINE_COMPACTION` | internal | - | ✓ | ✓ | · | ✓ | · | · | ✓ | · |
 | `ACP_BACKENDS_LOAD_WITHOUT_MODES` | internal | - | · | · | ✓ | · | · | · | ✓ | · |
+| `ACP_BACKENDS_LOCAL_CLEAR` | internal | - | · | ✓ | ✓ | · | ✓ | · | ✓ | ✓ |
 | `ACP_BACKENDS_MCP_CONFIG_HOT_RELOAD` | internal | - | · | · | · | · | · | ✓ | · | · |
-| `ACP_BACKENDS_MEMBER_PANEL` | internal | - | ✓ | ✓ | · | ✓ | ✓ | · | ✓ | · |
+| `ACP_BACKENDS_MEMBER_PANEL` | internal | - | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | · |
 | `ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS` | internal | - | · | ✓ | · | · | · | · | · | · |
 | `ACP_BACKENDS_NATIVE_TODOS` | internal | - | ✓ | · | · | · | · | · | · | · |
 | `ACP_BACKENDS_OPEN_EXTERNAL_URL` | internal | - | · | · | · | · | ✓ | · | · | · |
@@ -227,7 +228,7 @@ Read it by tier. `core` rows are the card, and the last row is each harness's co
 | `ACP_BACKENDS_TOOL_SEARCH_OVERLAY` | internal | - | · | · | · | · | · | ✓ | · | · |
 | `ACP_BACKENDS_UNATTRIBUTED_TERMINAL_ERROR` | internal | - | · | ✓ | · | · | · | · | · | · |
 | `ACP_BACKENDS_USER_LEVEL_AGENT_SPECS_ONLY` | internal | - | · | · | · | · | ✓ | · | · | · |
-| **core count** | core | | 5/7 | 6/7 | 3/7 | 4/7 | 7/7 | 6/7 | 4/7 | 2/6 (+1 ?) |
+| **core count** | core | | 5/7 | 6/7 | 4/7 | 4/7 | 7/7 | 6/7 | 4/7 | 2/6 (+1 ?) |
 <!-- complete-capabilities:end -->
 
 Two rules decide the bucket, and both are about what a mark on a card MEANS.

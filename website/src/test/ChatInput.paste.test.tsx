@@ -497,3 +497,101 @@ describe('ChatInput paste: strip trailing blank lines', () => {
     expect(onChange).toHaveBeenCalledWith('just one line')
   })
 })
+
+describe('ChatInput paste: value-change seam over a staged @mention (#18263)', () => {
+  // The two intercepting paste branches (large-paste collapse, trailing-blank
+  // strip) preventDefault and splice the value themselves, so no
+  // `insertFromPaste` beforeinput fires and the native mention seam never sees
+  // them. The interceptor must widen the replaced range through
+  // `mentionEditRange` on its own, else pasting over `main.ts` inside
+  // `@src/main.ts` leaves the half-reference `@src/` and the chip unstages.
+  //
+  // Here `mentionEditRange` is stubbed to report the whole `@src/main.ts` span
+  // whenever the selection cuts into it; the real span scan is covered by the
+  // composerFileMentions unit tests and the Playwright spec. This test proves
+  // paste.ts routes its splice through whatever range the stub returns.
+  const value = 'review @src/main.ts now'
+  const mentionAt = value.indexOf('@src/main.ts')
+  const mentionEnd = mentionAt + '@src/main.ts'.length
+  // Stub: expand any selection that cuts strictly into the mention to the whole span.
+  const mentionEditRange = (_t: string, s: number, e: number) =>
+    (mentionAt < s && s < mentionEnd) || (mentionAt < e && e < mentionEnd)
+      ? { start: Math.min(s, mentionAt), end: Math.max(e, mentionEnd) }
+      : null
+  // Select the `main.ts` fragment inside the mention (a cut-into selection).
+  const selStart = value.indexOf('main.ts')
+  const selEnd = selStart + 'main.ts'.length
+  const selectFragment = (ta: HTMLTextAreaElement) => {
+    ta.focus()
+    ta.setSelectionRange(selStart, selEnd)
+  }
+  const big = `${'x'.repeat(250)}\nsecond\nthird\nfourth`
+
+  beforeEach(() => {
+    ;(document as unknown as { execCommand: (...a: unknown[]) => boolean }).execCommand = vi.fn(() => false)
+  })
+
+  it('a LARGE paste over the mention splices out the whole mention, not just the selection', () => {
+    const onChange = vi.fn()
+    const onPasteBlocksChange = vi.fn()
+    renderWithProviders(
+      <ChatInput value={value} onChange={onChange} onSend={vi.fn()} onPasteBlocksChange={onPasteBlocksChange} mentionEditRange={mentionEditRange} />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    selectFragment(ta)
+    fireEvent.paste(ta, { clipboardData: { types: ['text/plain'], items: [], getData: () => big } })
+    // The big paste collapses to a chip, and the spliced value drops the WHOLE
+    // `@src/main.ts` — no `@src/` fragment survives.
+    const next = onChange.mock.calls.at(-1)?.[0] as string
+    expect(next).not.toMatch(/@src\//)
+    expect(next.startsWith('review ')).toBe(true)
+    expect(next.endsWith(' now')).toBe(true)
+    expect(onPasteBlocksChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('a trailing-blank small paste over the mention splices out the whole mention', () => {
+    const onChange = vi.fn()
+    renderWithProviders(
+      <ChatInput value={value} onChange={onChange} onSend={vi.fn()} onPasteBlocksChange={vi.fn()} mentionEditRange={mentionEditRange} />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    selectFragment(ta)
+    // Trailing blank lines force the handler's own insert path (execCommand stubbed false).
+    fireEvent.paste(ta, { clipboardData: { types: ['text/plain'], items: [], getData: () => 'README.md\n\n' } })
+    expect(onChange).toHaveBeenCalledWith('review README.md now')
+  })
+
+  it('a paste whose selection does NOT cut into a mention is spliced normally', () => {
+    const onChange = vi.fn()
+    renderWithProviders(
+      <ChatInput value={value} onChange={onChange} onSend={vi.fn()} onPasteBlocksChange={vi.fn()} mentionEditRange={mentionEditRange} />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    ta.focus()
+    // Select the trailing "now" — outside the mention, so the range is unchanged.
+    const s = value.indexOf('now')
+    ta.setSelectionRange(s, s + 'now'.length)
+    fireEvent.paste(ta, { clipboardData: { types: ['text/plain'], items: [], getData: () => 'later\n\n' } })
+    expect(onChange).toHaveBeenCalledWith('review @src/main.ts later')
+  })
+
+  it('a COLLAPSED-caret paste inside a mention inserts there, it does not delete the mention', () => {
+    // A collapsed caret inside `@src/main.ts` is a plain insertion the user is
+    // making INSIDE the mention, not an edit over it — pasting must insert at
+    // the caret, never expand the empty range to the whole mention and delete
+    // it (GPT 6.1). Mirrors the beforeinput seam's `s === en` guard.
+    const onChange = vi.fn()
+    renderWithProviders(
+      <ChatInput value={value} onChange={onChange} onSend={vi.fn()} onPasteBlocksChange={vi.fn()} mentionEditRange={mentionEditRange} />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    ta.focus()
+    // Caret collapsed strictly inside the mention, right before `main.ts`.
+    const caret = value.indexOf('main.ts')
+    ta.setSelectionRange(caret, caret)
+    // Trailing blanks force the handler's own insert path (execCommand stubbed false).
+    fireEvent.paste(ta, { clipboardData: { types: ['text/plain'], items: [], getData: () => 'X\n\n' } })
+    // Inserted at the caret; the whole mention text survives.
+    expect(onChange).toHaveBeenCalledWith('review @src/Xmain.ts now')
+  })
+})

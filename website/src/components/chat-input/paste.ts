@@ -37,7 +37,7 @@ function isBlockquotePrefix(linePrefix: string): boolean {
   return sawMarker
 }
 
-export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChange, showFullPastes, onUploadFiles, inputRef, valueRef, valueFromUserRef, recordCaret, ime }: {
+export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChange, showFullPastes, onUploadFiles, inputRef, valueRef, valueFromUserRef, recordCaret, ime, mentionEditRange }: {
   value: string
   onChange: (v: string) => void
   pasteBlocks: PasteBlock[]
@@ -49,6 +49,14 @@ export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChan
   valueFromUserRef: React.MutableRefObject<boolean>
   recordCaret: () => void
   ime: ReturnType<typeof useImeGuard>
+  /** The mention value-change seam (#18263). Given the pre-edit text and the
+   *  selection [s, e) a paste is about to replace, returns that range EXPANDED
+   *  to cover the whole of every staged `@mention` it cuts into, or null when
+   *  it touches none. A paste intercepted here calls `preventDefault()` and
+   *  splices the value itself, so the browser fires no `insertFromPaste`
+   *  `beforeinput` — the native seam in `useEditorInput` never sees it, and
+   *  this is the one path that must expand the range on its own. */
+  mentionEditRange?: (text: string, selStart: number, selEnd: number) => { start: number; end: number } | null
 }) {
   // Backdrop mirror that paints chip backgrounds behind paste tokens; its scroll
   // is kept in lockstep with the textarea (see syncMirrorScroll on the textarea).
@@ -270,8 +278,21 @@ export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChan
     const cleaned = forceRaw ? pasted : stripTrailingBlankLines(pasted)
 
     const ta = e.currentTarget
-    const start = ta.selectionStart ?? value.length
-    const end = ta.selectionEnd ?? start
+    const rawStart = ta.selectionStart ?? value.length
+    const rawEnd = ta.selectionEnd ?? rawStart
+    // Paste-over of a staged mention (#18263). Both intercepting branches below
+    // preventDefault and splice the value from [start, end), so the browser
+    // fires no `insertFromPaste` beforeinput and the native seam never runs. If
+    // the selection cuts INTO a staged mention, expand it to the whole mention
+    // here — otherwise a partial cover (`main.ts` inside `@src/main.ts`) strands
+    // the half-reference `@src/` and its chip silently unstages. Only a REAL
+    // selection expands: a COLLAPSED caret inside a mention is a plain insertion
+    // the user is making INSIDE it (`@src/|main.ts` + paste must insert there,
+    // not delete the whole mention), the same guard the beforeinput seam applies
+    // (keyboard.ts: `if (s === en && !isDeleteType) return`).
+    const span = rawStart !== rawEnd ? (mentionEditRange?.(value, rawStart, rawEnd) ?? null) : null
+    const start = span ? span.start : rawStart
+    const end = span ? span.end : rawEnd
     const before = value.slice(0, start)
     const after = value.slice(end)
 
@@ -314,6 +335,11 @@ export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChan
     if (cleaned !== pasted && cleaned !== '') {
       e.preventDefault()
       const next = before + cleaned + after
+      // When the selection was expanded over a staged mention (`span`), widen
+      // the live DOM selection to that whole range BEFORE the native insert, so
+      // `execCommand('insertText')` — which replaces only the current DOM
+      // selection — removes the whole mention instead of leaving a fragment.
+      if (span) ta.setSelectionRange(start, end)
       // Insert through the native input path so the textarea's own onChange runs:
       // that fires the /, @, $ picker detection, marks the edit user-driven, and
       // keeps native undo. Fall back to a controlled-value splice where
@@ -342,7 +368,7 @@ export function usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChan
         }
       })
     }
-  }, [onUploadFiles, onPasteBlocksChange, pasteBlocks, value, onChange, showFullPastes, valueFromUserRef])
+  }, [onUploadFiles, onPasteBlocksChange, pasteBlocks, value, onChange, showFullPastes, valueFromUserRef, mentionEditRange])
 
   /** Replace a collapsed-paste token with its full content in the textarea and
    *  drop the backing block. The caret lands just past the inserted content. */

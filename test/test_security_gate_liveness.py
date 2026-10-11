@@ -238,7 +238,14 @@ def _url_payload_command(n: int) -> str:
 #: other branches' start search guards the Telegram branch so a long digit run is
 #: walked once, not once per digit, and the JWT start keeps its run's end so an
 #: overlapping match does not re-walk that run. No pattern moved and no pass changed.
-_PACKAGE_LINE_BUDGET = 28_827
+#:
+#: Raised again, from 28,827, for ``rm_floor``: the argv floor that reads a
+#: recursive-force ``rm`` in any flag or home spelling against the root or home dir
+#: itself, with a word split on the shared quote state machine that drops comments,
+#: heredoc bodies and redirections, per-occurrence reachability that skips printed,
+#: single-quoted, commented and quoted-heredoc substitutions,
+#: and its gated branch at the end of ``is_denied``. No pattern moved.
+_PACKAGE_LINE_BUDGET = 29_223
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

@@ -296,10 +296,10 @@ def _open_verified_nofollow(path: Path, sandbox: ModuleType) -> int:
     """Open *path* for the trust check without following a symlinked leaf.
 
     ``O_NOFOLLOW`` refuses a symlink at the leaf with ``ELOOP`` (``EMLINK`` on some BSDs).
-    That is the same refusal the spawn path makes for a symlinked component, so it is
-    raised the same way, as ``SandboxCeilingUnsealable`` naming the file and the remedy,
-    rather than as an ``OSError`` that would abort voice preparation with nothing the
-    operator can act on. Any other open error propagates unchanged.
+    That is the same refusal ``sandbox.require_real_model_path`` makes for a linked step on
+    the way, so it is raised the same way, as ``SandboxCeilingUnsealable`` naming the file
+    and the remedy, rather than as an ``OSError`` that would abort voice preparation with
+    nothing the operator can act on. Any other open error propagates unchanged.
     """
     try:
         return os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_BINARY)
@@ -328,6 +328,15 @@ def _sha256_verified_file(path: Path) -> str:
     about that name are two resolutions with a swap window between them, so the digest
     would describe one inode and the refusal another. ``O_NOFOLLOW`` because a symlinked
     leaf must fail here rather than resolve somewhere the seal does not cover.
+
+    Judged BEFORE the first byte is read, and the inode's stamp compared after the last.
+    A judgement only at the end of the read can be raced: write through the alias into a
+    chunk already hashed, unlink the alias, and the final ``fstat`` sees one link while
+    the digest describes bytes the file does not hold. Before the read, an alias that
+    exists refuses outright; across the read, a write, link or unlink through any handle
+    changes the stamp, and a stamp that moved refuses too, because the digest then
+    describes bytes other than the file's. A sandboxed child cannot create the alias in
+    between: the seal refuses ``link(2)`` into or out of ``models/``.
     """
     # Imported here, not at module scope: this keeps the sandbox module out of the stt
     # import graph, mirroring the lazy direction sandbox itself uses for stt.
@@ -335,19 +344,46 @@ def _sha256_verified_file(path: Path) -> str:
 
     fd = _open_verified_nofollow(path, sandbox)
     try:
+        # Raises SandboxCeilingUnsealable, which is NOT a failed digest: it refuses the
+        # load rather than returning a verdict the caller would answer with a download.
+        sandbox.require_unaliased_model_file(str(path), fd=fd)
+        before = _inode_stamp(os.fstat(fd))
         digest = hashlib.sha256()
         while True:
             chunk = os.read(fd, _CHUNK_BYTES)
             if not chunk:
                 break
             digest.update(chunk)
-        # After the read, so the answer is about the inode whose bytes were consumed.
-        # Raises SandboxCeilingUnsealable, which is NOT a failed digest: it refuses the
-        # load rather than returning a verdict the caller would answer with a download.
-        sandbox.require_unaliased_model_file(str(path), fd=fd)
+        if _inode_stamp(os.fstat(fd)) != before:
+            raise sandbox.SandboxCeilingUnsealable(
+                f"the verified model file {sandbox.safe_terminal_line(str(path))} changed "
+                "while it was being verified (written, linked or unlinked through another "
+                "name or descriptor), so its digest no longer describes the bytes the loader "
+                "would open. Find what else writes it, and any second name for it "
+                "(find -samefile, or fsutil hardlink list on Windows); the next load "
+                "verifies it again."
+            )
         return digest.hexdigest()
     finally:
         os.close(fd)
+
+
+def _inode_stamp(info: os.stat_result) -> tuple[int, ...]:
+    """What a write, link or unlink on an inode changes, for :func:`_sha256_verified_file`.
+
+    ``st_ctime_ns`` is the field that matters on POSIX: every write, ``link``,
+    ``unlink`` and ``utime`` sets it to the current time, and no caller can set it
+    back, so restoring ``st_mtime_ns`` does not hide a write. ``st_nlink`` names a link
+    change directly. Access time is left out: reading the file to hash it moves it.
+    """
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+        info.st_nlink,
+    )
 
 
 def stream_pinned_payload(
@@ -610,8 +646,9 @@ class ModelStore:
     async def _accept_existing_or_refuse(self, model: WhisperModel) -> tuple[Path | None, bool]:
         """:meth:`_accept_existing`, with an aliased file reported instead of raised.
 
-        Returns ``(path, refused)``. A file reachable under a second hard link is refused
-        at load (see :meth:`_verified_on_disk`). ``ensure`` promises ``None`` rather than
+        Returns ``(path, refused)``. A file reachable under a second hard link, or through
+        a symlink or junction at any step from ``models``, is refused at load (see
+        :meth:`_accept_existing` and :meth:`_verified_on_disk`). ``ensure`` promises ``None`` rather than
         an exception into a websocket handler, so the refusal becomes a
         ``failed`` status (flagged ``refused``) carrying the message that names the file
         and the remedy, which the settings page shows as it shows any failure, and ``ensure``
@@ -638,7 +675,19 @@ class ModelStore:
 
         ``None`` means "carry on to the download": either nothing is there, or what was
         there failed the pin and has been deleted.
+
+        Raises ``SandboxCeilingUnsealable`` when a name from ``models`` down to the file
+        is a symlink or junction (``sandbox.require_real_model_path``), asked before
+        anything reads or writes through the path, so the link refuses this model's load
+        and the download that would otherwise land through it, and nothing else.
         """
+        # Imported here, not at module scope: this keeps the sandbox module out of the
+        # stt import graph, mirroring the lazy direction sandbox itself uses for stt.
+        from kiro_crew import sandbox
+
+        sandbox.require_real_model_path(
+            str(model_path(model)), models_root=str(models_dir().parent)
+        )
         if not is_present(model):
             return None
         if not await self._verified_on_disk(model):
@@ -678,12 +727,14 @@ class ModelStore:
         native loader reopens this path by name", and an alias is exactly a writable
         handle onto the inode that just passed. Asked about the DESCRIPTOR the bytes
         were read from (``sandbox.require_unaliased_model_file``), so the inode judged
-        and the inode hashed are one resolution rather than two. It refuses rather than
-        returning ``False``: ``False`` means "download over it", which would hand an
-        operator a silent multi-gigabyte transfer as the report of a condition only they
-        can fix, and the file is deliberately left untouched -- a hard link is ordinary
-        for a dotfile manager or a deduplicating backup, so deleting one name of the
-        operator's own file is not this gate's call to make.
+        and the inode hashed are one resolution rather than two. It is asked BEFORE the
+        first byte is read, and the inode's stamp must not move across the read, so an
+        alias cannot be written through and unlinked while the hash runs. It refuses
+        rather than returning ``False``: ``False`` means "download over it", which would
+        hand an operator a silent multi-gigabyte transfer as the report of a condition
+        only they can fix, and the file is deliberately left untouched -- a hard link is
+        ordinary for a dotfile manager or a deduplicating backup, so deleting one name of
+        the operator's own file is not this gate's call to make.
 
         A file that fails the DIGEST is deleted, so the caller's download path replaces
         it rather than reporting voice as broken.
@@ -691,9 +742,11 @@ class ModelStore:
         Deliberately diverging from `embeddings`, which documents the same size-only
         trade for its own GGUF. That reasoning ("a sha256 over ~600MB on every boot
         buys almost nothing") weighed a corrupted download, not a writable directory
-        and an agent with a shell. The alias question does not arise there either: with
-        no digest at load there is no verified-then-reopened window for a second name to
-        slip into.
+        and an agent with a shell. The alias question applies there too, and harder: with
+        no digest at load, a second name in a writable tree is the whole exposure, so
+        ``embeddings._model_file_stamp_unaliased`` asks the same
+        ``sandbox.require_unaliased_model_file`` about its own ``O_NOFOLLOW`` descriptor
+        and refuses that one load.
         """
         path = model_path(model)
         if not path.is_file():

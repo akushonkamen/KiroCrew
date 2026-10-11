@@ -1086,22 +1086,22 @@ PATH to a native loader leaves a window in which the bytes can be swapped, and
 re-hashing cannot close it because the loader re-opens by name. What closes it is that
 `<data home>/models` is **write-protected from the agent on both paths**
 (`security._WRITE_PROTECTED_HOME_PATHS` for the file tools, and the `models` leaf of
-`sandbox._CREW_READONLY_LEAVES`, mounted read-only for a shell). The bounded check
-covers only the live home's loader files (the bundled embedding GGUF, catalogue
-whisper weights and this platform's decoder) and runs on every spawn Kiro Crew seals
-itself — the Linux namespace backend and the macOS Seatbelt backend — but not on a
-delegated Kiro hand-off (macOS or Windows) or a spawn with no sandbox (sandbox off, or
-no backend): neither applies a Kiro Crew seal over `models`, so there is nothing for an
-alias to defeat. A symlink or junction at any step
-from `models` to a loader file refuses those sealed spawns, naming the path, until
-replaced with a real directory or file. Keep the weights as real files under `models/`;
-to put them on another disk, relocate the whole data home (`KIROCREW_HOME`), so the
-seal covers them. A mount point at or under `models` is not checked: only the operator
-can create one on the host (a mount made inside the sandbox's namespace never reaches
-it), and a bind mount keeps its source path writable, so do not mount anything there.
-The check follows and removes nothing. Missing files are skipped; other stat errors
-warn and skip that file. Non-loader names, download staging files and non-live homes
-are untouched. Reads stay allowed — the
+`sandbox._CREW_READONLY_LEAVES`, mounted read-only for a shell). Both cover paths, so
+before a load `ModelStore._accept_existing` asks `sandbox.require_real_model_path`
+whether any name from `models` down to the weights is a symlink or junction. One that
+is refuses this model's load, and the download that would otherwise land through it,
+with a `failed` status flagged `refused` naming the path; sandboxed spawns and the
+other models are unaffected. A step below `models` sits inside the read-only seal, so
+only the host can have made such a link, and it threatens only the bytes this loader
+reads. A symlink or junction at the `models` name itself also refuses every spawn Kiro
+Crew seals, because that name sits in the writable data home. Keep the weights as real
+files under `models/`; to put them on another disk, relocate the whole data home
+(`KIROCREW_HOME`), so the seal covers them. A mount point at or under `models` is not
+checked: only the operator can create one on the host (a mount made inside the
+sandbox's namespace never reaches it), and a bind mount keeps its source path
+writable, so do not mount anything there. The check follows, reads and removes
+nothing; a missing name ends it, and a name that cannot be stat'ed refuses the load.
+Reads stay allowed — the
 weights hold no secret and the settings surface reports what is installed — and
 Kiro Crew's own downloader writes directly without routing through those gates, so a
 first fetch and a re-download after a failed check both work.
@@ -1111,7 +1111,12 @@ A second HARD LINK on the weights is judged here instead, at the gate that verif
 them. `_verified_on_disk` opens the file once with `O_NOFOLLOW`, hashes it from that
 descriptor, and asks `sandbox.require_unaliased_model_file` about that same
 descriptor — so the inode judged and the inode hashed are one resolution, where a name
-check and a later `open` would be two. An alias refuses that LOAD and nothing else:
+check and a later `open` would be two. The question is asked BEFORE the first byte is
+read, and the inode's stamp (`st_ctime_ns`, `st_mtime_ns`, size, link count) must not
+move across the read: a check only at the end of the read loses a race in which a
+write through the alias lands in a chunk already hashed and the alias is then unlinked,
+so the final `fstat` sees one link while the digest still matches. A stamp that moves
+refuses the load the same way. An alias refuses that LOAD and nothing else:
 the bytes, the inode and both names are left as they are, because "unverified" would
 mean "download over it" (answering a condition only the operator can fix with a silent
 multi-gigabyte transfer) and deleting would remove one name of the operator's own file.

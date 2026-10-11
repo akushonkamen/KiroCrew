@@ -1377,12 +1377,13 @@ def _model_file_stamp_unaliased(path: Path) -> tuple[int, ...] | None:
 
     The bundled GGUF has no digest at load, so a second hard link sitting in a tree the
     sandbox can write is a writable handle onto the weights the next load maps. For a file
-    under the live :func:`models_dir`, the file is opened ``O_NOFOLLOW`` and
-    ``sandbox.require_unaliased_model_file`` judges that descriptor; the stamp comes from
-    the same ``fstat``, so the comparison after the constructor proves llama.cpp mapped the
-    inode judged here. A hard-linked or symlinked file refuses this LOAD, never a spawn. A
-    custom model outside ``models_dir`` is the operator's own file, outside the seal, and
-    keeps the plain stamp.
+    under the live :func:`models_dir`, ``sandbox.require_real_model_path`` first refuses a
+    symlink or junction at any name from ``models`` down to the file; the file is then
+    opened ``O_NOFOLLOW`` and ``sandbox.require_unaliased_model_file`` judges that
+    descriptor; the stamp comes from the same ``fstat``, so the comparison after the
+    constructor proves llama.cpp mapped the inode judged here. A link or a second hard
+    link refuses this LOAD, never a spawn. A custom model outside ``models_dir`` is the
+    operator's own file, outside the seal, and keeps the plain stamp.
     """
     models_root = os.path.abspath(models_dir())
     try:
@@ -1397,6 +1398,7 @@ def _model_file_stamp_unaliased(path: Path) -> tuple[int, ...] | None:
 
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
+        sandbox.require_real_model_path(str(path), models_root=models_root)
         try:
             fd = os.open(path, flags)
         except OSError as exc:

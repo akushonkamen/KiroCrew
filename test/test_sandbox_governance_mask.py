@@ -385,6 +385,16 @@ class TestAbsentRegistryTrustIsSealedByPrecreation:
 
 @_POSIX_ONLY
 class TestModelLoaderPaths:
+    """A link on the way to a loader file fails that model's LOAD; only the ``models``
+    name itself refuses a sealed spawn.
+
+    A step below ``models`` sits inside the read-only seal, so only the host can have made
+    a link there, and it threatens only the bytes the loader reads. Each loader therefore
+    asks ``sandbox.require_real_model_path`` before it opens the file, and a sealed spawn is
+    built over such a link. The ``models`` name lives in the writable data home, so a link
+    there still refuses the spawn on both backends.
+    """
+
     @pytest.fixture
     def crew(self, tmp_path, monkeypatch):
         from kiro_crew import embeddings
@@ -400,23 +410,22 @@ class TestModelLoaderPaths:
     @pytest.fixture
     def loader_files(self, crew):
         from kiro_crew import embeddings
-        from kiro_crew.stt import decoder, models
+        from kiro_crew.stt import models
 
         paths = [embeddings.default_model_path()]
         paths.extend(models.model_path(model) for model in models.CATALOG)
-        installed = decoder.installed_path()
-        if installed is not None:
-            paths.append(installed)
         return paths
 
-    @pytest.mark.parametrize("loader_index", range(6))
+    @staticmethod
+    def _check(crew, path) -> None:
+        sandbox.require_real_model_path(str(path), models_root=str(crew / "models"))
+
+    @pytest.mark.parametrize("loader_index", range(5))
     def test_loader_file_symlink_refuses_without_reading_or_removing_it(
         self, crew, loader_files, tmp_path, monkeypatch, loader_index
     ):
         from pathlib import Path
 
-        if loader_index >= len(loader_files):
-            pytest.skip("no pinned decoder for this platform")
         target = tmp_path / "outside"
         target.write_bytes(b"original")
         real_lstat = os.lstat
@@ -436,20 +445,18 @@ class TestModelLoaderPaths:
             patcher.setattr(Path, "open", no_open)
             patcher.setattr("builtins.open", no_open)
             with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
-                sandbox._refuse_aliased_model_descendants()
+                self._check(crew, link)
         assert str(link) in str(exc.value)
         assert str(target) in str(exc.value)
         assert "SYMLINK" in str(exc.value)
+        assert "not loaded" in str(exc.value)
         assert link.is_symlink()
         assert target.read_bytes() == b"original"
 
-    @pytest.mark.parametrize("component", ("models", "whisper", "ffmpeg"))
-    def test_intermediate_symlink_refuses(self, crew, tmp_path, monkeypatch, component):
-        from kiro_crew.stt import decoder
-
-        # Pin a supported platform so the decoder directory is always a loader ancestor.
-        artifact = decoder.ARTIFACTS[0]
-        monkeypatch.setattr(decoder, "artifact_for", lambda: artifact)
+    @pytest.mark.parametrize("component", ("models", "whisper"))
+    def test_intermediate_symlink_refuses(
+        self, crew, loader_files, tmp_path, monkeypatch, component
+    ):
         target = tmp_path / "outside"
         target.mkdir()
         link = crew / "models"
@@ -466,9 +473,10 @@ class TestModelLoaderPaths:
         with monkeypatch.context() as patcher:
             patcher.setattr(sandbox.os, "lstat", lstat)
             with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
-                sandbox._refuse_aliased_model_descendants()
+                self._check(crew, loader_files[1])
         assert str(link) in str(exc.value)
         assert str(target) in str(exc.value)
+        assert "KIROCREW_HOME" in str(exc.value)
         assert link.is_symlink()
 
     @pytest.mark.parametrize("component", ("models", "whisper", "weights"))
@@ -507,7 +515,7 @@ class TestModelLoaderPaths:
             patcher.setattr(Path, "open", no_open)
             patcher.setattr("builtins.open", no_open)
             with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
-                sandbox._refuse_aliased_model_descendants()
+                self._check(crew, weights)
         message = str(exc.value)
         assert str(linked) in message
         assert "JUNCTION" in message
@@ -519,7 +527,7 @@ class TestModelLoaderPaths:
         assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
         assert weights.read_bytes() == b"original"
 
-    def test_non_surrogate_loader_paths_pass(self, crew, loader_files, monkeypatch):
+    def test_real_loader_paths_pass(self, crew, loader_files):
         from unittest.mock import patch
 
         for path in loader_files:
@@ -528,56 +536,162 @@ class TestModelLoaderPaths:
         with patch.object(
             sandbox.platform_compat, "lstat_is_name_surrogate", return_value=False
         ) as surrogate:
-            sandbox._refuse_aliased_model_descendants()
+            for path in loader_files:
+                self._check(crew, path)
         assert surrogate.call_count >= len(loader_files)
         assert all(path.read_bytes() == b"original" for path in loader_files)
 
-    def test_non_loader_symlink_passes(self, crew):
-        link = crew / "models" / "whisper" / "scratch"
+    def test_a_hardlinked_loader_file_passes_the_walk(self, crew, loader_files, tmp_path):
+        # A second hard link is judged on the loader's descriptor
+        # (``require_unaliased_model_file``), not by this name walk.
+        outside = tmp_path / "weights"
+        outside.write_bytes(b"original")
+        linked = loader_files[1]
+        linked.parent.mkdir(parents=True)
+        os.link(outside, linked)
+
+        self._check(crew, linked)
+
+        assert linked.samefile(outside)
+
+    def test_a_path_outside_the_models_tree_is_not_checked(self, crew, tmp_path):
+        custom = tmp_path / "custom" / "model.gguf"
+        custom.parent.mkdir()
+        custom.symlink_to(tmp_path / "missing")
+
+        self._check(crew, custom)
+
+        assert custom.is_symlink()
+
+    def test_bounded_metadata_only_check(self, crew, loader_files, monkeypatch):
+        weights = loader_files[1]
+        weights.parent.mkdir(parents=True)
+        weights.write_bytes(b"original")
+        real_lstat = os.lstat
+        inspected = []
+
+        def lstat(path, *args, **kwargs):
+            inspected.append(os.fspath(path))
+            return real_lstat(path, *args, **kwargs)
+
+        def no_enumeration(*args, **kwargs):
+            pytest.fail("model check must not enumerate directories")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(sandbox.os, "lstat", lstat)
+            patcher.setattr(sandbox.os, "scandir", no_enumeration)
+            patcher.setattr(sandbox.os, "walk", no_enumeration)
+            self._check(crew, weights)
+        assert inspected == [str(crew / "models"), str(weights.parent), str(weights)]
+
+    def test_missing_tree_passes_without_creating_it(self, crew, loader_files):
+        self._check(crew, loader_files[1])
+        assert not (crew / "models").exists()
+
+    @pytest.mark.parametrize("intermediate", (False, True))
+    def test_an_unreadable_name_refuses_the_load(
+        self, crew, loader_files, monkeypatch, intermediate
+    ):
+        weights = loader_files[1]
+        weights.parent.mkdir(parents=True)
+        weights.write_bytes(b"original")
+        failing = weights.parent if intermediate else weights
+        real_lstat = os.lstat
+
+        def lstat(path, *args, **kwargs):
+            if os.fspath(path) == str(failing):
+                raise PermissionError("cannot inspect\nmodel\x1b[31m")
+            return real_lstat(path, *args, **kwargs)
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(sandbox.os, "lstat", lstat)
+            with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
+                self._check(crew, weights)
+        message = str(exc.value)
+        assert str(failing) in message
+        assert "not loaded" in message
+        assert "\n" not in message and "\x1b" not in message
+
+    def test_a_vanishing_name_ends_the_walk(self, crew, loader_files, monkeypatch):
+        weights = loader_files[1]
+        weights.parent.mkdir(parents=True)
+        real_lstat = os.lstat
+        inspected = []
+
+        def lstat(path, *args, **kwargs):
+            inspected.append(os.fspath(path))
+            if os.fspath(path) == str(weights.parent):
+                raise FileNotFoundError(path)
+            return real_lstat(path, *args, **kwargs)
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(sandbox.os, "lstat", lstat)
+            self._check(crew, weights)
+        assert str(weights) not in inspected
+
+    def test_symlink_diagnostic_escapes_terminal_controls(self, crew, loader_files, monkeypatch):
+        unusual = crew / "line\nbreak\x1b[31m"
+        link = unusual / loader_files[0].relative_to(crew)
         link.parent.mkdir(parents=True)
-        link.symlink_to("missing")
+        link.symlink_to("missing\n\x1b[31mtarget")
 
-        sandbox._refuse_aliased_model_descendants()
+        with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
+            sandbox.require_real_model_path(str(link), models_root=str(unusual / "models"))
 
+        assert "\n" not in str(exc.value)
+        assert "\x1b" not in str(exc.value)
+        assert "target" in str(exc.value)
         assert link.is_symlink()
 
-    @pytest.mark.parametrize("alias_kind", ("hardlink", "symlink"))
+    @pytest.mark.parametrize("alias_kind", ("hardlink", "symlink", "linked-models"))
     def test_an_aliased_gguf_fails_the_embedder_load_not_the_spawn(
         self, crew, loader_files, tmp_path, monkeypatch, alias_kind
     ):
         # The GGUF has no digest at load, so a second name in a writable tree is the
-        # whole exposure. The embedder refuses to hand llama.cpp the path; the spawn path
-        # still admits the hard link (the symlink is refused there, at the component).
+        # whole exposure. The embedder refuses to hand llama.cpp the path; a second hard
+        # link, a symlinked file and a linked models directory each fail that load.
         from kiro_crew import embeddings
 
         gguf = loader_files[0]
-        gguf.parent.mkdir(parents=True)
         payload = b"\0" * (embeddings._GGUF_MIN_BYTES + 1)
         outside = tmp_path / "workspace-alias.gguf"
-        if alias_kind == "hardlink":
-            gguf.write_bytes(payload)
-            os.link(gguf, outside)
+        if alias_kind == "linked-models":
+            elsewhere = tmp_path / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / gguf.name).write_bytes(payload)
+            gguf.parent.symlink_to(elsewhere, target_is_directory=True)
         else:
-            outside.write_bytes(payload)
-            gguf.symlink_to(outside)
+            gguf.parent.mkdir(parents=True)
+            if alias_kind == "hardlink":
+                gguf.write_bytes(payload)
+                os.link(gguf, outside)
+            else:
+                outside.write_bytes(payload)
+                gguf.symlink_to(outside)
         opened: list = []
 
         class _Tripwire:
             def __init__(self, **kwargs):
                 opened.append(kwargs.get("model_path"))
+                raise RuntimeError("stop after the handoff")
 
         monkeypatch.setattr(embeddings, "_load_llama_class", lambda: _Tripwire)
+        # Without it a refusal would be indistinguishable from a context-policy failure
+        # on the stub payload: the lone-GGUF test below reaches the tripwire this way.
+        monkeypatch.setattr(
+            embeddings,
+            "_model_context_policy",
+            lambda path: SimpleNamespace(n_ctx=embeddings._N_CTX, n_batch=512, n_ubatch=512),
+        )
         embedder = embeddings.LlamaCppEmbedder(model_path=gguf, dim=1024, model_id="x:1")
         embedder.wait_ready(timeout=5)
 
         assert embedder.is_ready() is False
         assert opened == [], "llama.cpp must never be handed an aliased GGUF"
-        assert outside.read_bytes() == payload
-        if alias_kind == "hardlink":
-            sandbox._refuse_aliased_model_descendants()
-        else:
-            with pytest.raises(sandbox.SandboxCeilingUnsealable):
-                sandbox._refuse_aliased_model_descendants()
+        if alias_kind != "linked-models":
+            assert outside.read_bytes() == payload
+            # Only the models NAME refuses a spawn; an alias below it does not.
+            sandbox._refuse_linked_models_leaf()
 
     def test_a_lone_gguf_still_reaches_the_loader(self, crew, loader_files, monkeypatch):
         from kiro_crew import embeddings
@@ -602,55 +716,6 @@ class TestModelLoaderPaths:
         embedder.wait_ready(timeout=5)
 
         assert opened == [str(gguf)]
-
-    @pytest.mark.parametrize("loader_index", range(6))
-    def test_hardlinked_loader_file_does_not_refuse_the_spawn(
-        self, crew, loader_files, tmp_path, loader_index
-    ):
-        # A second name on a loader file is judged at the LOADER, on the descriptor the
-        # digest was computed from, so the spawn path must let it through: refusing here
-        # costs every sandboxed spawn on a host whose weights legitimately carry a second
-        # name (stow, chezmoi, ``rsync --link-dest``, ``jdupes -L``).
-        if loader_index >= len(loader_files):
-            pytest.skip("no pinned decoder for this platform")
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = loader_files[loader_index]
-        linked.parent.mkdir(parents=True, exist_ok=True)
-        os.link(outside, linked)
-        before = linked.stat()
-
-        sandbox._refuse_aliased_model_descendants()
-
-        assert linked.samefile(outside)
-        assert linked.stat().st_nlink == before.st_nlink
-        assert linked.read_bytes() == outside.read_bytes() == b"original"
-
-    def test_non_loader_hardlink_passes(self, crew, tmp_path):
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = crew / "models" / "whisper" / "scratch"
-        linked.parent.mkdir(parents=True)
-        os.link(outside, linked)
-
-        sandbox._refuse_aliased_model_descendants()
-
-        assert linked.samefile(outside)
-        assert linked.read_bytes() == b"original"
-
-    def test_non_live_loader_symlink_passes(self, crew, loader_files, tmp_path, monkeypatch):
-        unused = tmp_path / "unused home"
-        monkeypatch.setattr(sandbox, "_masked_crew_home_roots", lambda: [str(crew), str(unused)])
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = unused / loader_files[0].relative_to(crew)
-        linked.parent.mkdir(parents=True)
-        linked.symlink_to(outside)
-
-        sandbox._refuse_aliased_model_descendants()
-
-        assert linked.is_symlink()
-        assert outside.read_bytes() == b"original"
 
     @pytest.fixture
     def wrap_branch(self, crew, tmp_path, monkeypatch):
@@ -691,129 +756,174 @@ class TestModelLoaderPaths:
 
         return configure
 
-    # Branches that apply a Kiro Crew seal, so the model loader paths are checked;
-    # and the branches that apply none (a delegated Kiro hand-off or an unconfined
-    # spawn), where nothing of Kiro Crew's seals models for an alias to defeat.
-    _CHECKED_BRANCHES = ("namespace", "seatbelt")
+    # The branches that apply a Kiro Crew seal, and those that apply none (a delegated
+    # Kiro hand-off or an unconfined spawn), where nothing of Kiro Crew's seals models.
+    _SEALED_BRANCHES = ("namespace", "seatbelt")
     _DELEGATED_BRANCHES = ("darwin-delegated", "windows-delegated", "darwin-off-delegated")
-    _UNCHECKED_BRANCHES = ("off-linux", "off-nonkiro", "none", "nested", *_DELEGATED_BRANCHES)
+    _UNSEALED_BRANCHES = ("off-linux", "off-nonkiro", "none", "nested", *_DELEGATED_BRANCHES)
 
-    @pytest.mark.parametrize("branch", _CHECKED_BRANCHES)
-    def test_every_sealed_branch_refuses_loader_symlink(
-        self, crew, loader_files, tmp_path, wrap_branch, branch
-    ):
-        outside = tmp_path / "weights"
+    @staticmethod
+    def _plant(crew, loader_files, tmp_path, alias_kind):
+        """Put an alias of *alias_kind* on the whisper weights' way; return the alias."""
+        weights = loader_files[1]
+        outside = tmp_path / "outside"
+        if alias_kind == "linked-step":
+            outside.mkdir()
+            (outside / weights.name).write_bytes(b"original")
+            weights.parent.parent.mkdir(parents=True)
+            weights.parent.symlink_to(outside, target_is_directory=True)
+            return weights.parent
+        weights.parent.mkdir(parents=True)
         outside.write_bytes(b"original")
-        linked = loader_files[0]
-        linked.parent.mkdir(parents=True)
-        linked.symlink_to(outside)
+        if alias_kind == "linked-models":
+            weights.parent.rmdir()
+            (crew / "models").rmdir()
+            elsewhere = tmp_path / "elsewhere"
+            elsewhere.mkdir()
+            (crew / "models").symlink_to(elsewhere, target_is_directory=True)
+            return crew / "models"
+        if alias_kind == "symlink":
+            weights.symlink_to(outside)
+        else:
+            os.link(outside, weights)
+        return weights
+
+    @pytest.mark.parametrize("branch", _SEALED_BRANCHES)
+    @pytest.mark.parametrize("alias_kind", ("linked-step", "symlink", "hardlink"))
+    def test_an_alias_below_the_models_name_does_not_refuse_a_sealed_spawn(
+        self, crew, loader_files, tmp_path, wrap_branch, branch, alias_kind
+    ):
+        # The loader that reads the file refuses that one load; the spawn is built.
+        alias = self._plant(crew, loader_files, tmp_path, alias_kind)
         argv, options = wrap_branch(branch)
+
+        argv_out, cleanup = sandbox.wrap_argv(argv, **options)
+
+        if cleanup is not None:
+            os.unlink(cleanup)
+        assert argv_out[-len(argv) :] == argv
+        assert alias.is_symlink() if alias_kind != "hardlink" else alias.stat().st_nlink == 2
+
+    def test_a_linked_models_name_refuses_the_seatbelt_spawn(
+        self, crew, loader_files, tmp_path, wrap_branch
+    ):
+        # The namespace builder refuses the same link in _materialize_sealable_ceilings
+        # (see test_a_symlinked_models_leaf_refuses_the_spawn); Seatbelt asks here.
+        alias = self._plant(crew, loader_files, tmp_path, "linked-models")
+        argv, options = wrap_branch("seatbelt")
 
         with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
             sandbox.wrap_argv(argv, **options)
 
-        assert str(linked) in str(exc.value)
-        assert linked.is_symlink()
-        assert linked.read_bytes() == outside.read_bytes() == b"original"
+        assert str(alias) in str(exc.value)
+        assert "KIROCREW_HOME" in str(exc.value)
+        assert alias.is_symlink()
 
-    @pytest.mark.parametrize("branch", _CHECKED_BRANCHES)
-    def test_every_sealed_branch_admits_a_hardlinked_loader_file(
-        self, crew, loader_files, tmp_path, wrap_branch, branch
-    ):
-        # The load-time guard is what judges a second name, so a sealed spawn must still
-        # be buildable on a host whose weights carry one.
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = loader_files[0]
-        linked.parent.mkdir(parents=True)
-        os.link(outside, linked)
-        argv, options = wrap_branch(branch)
+    @pytest.mark.parametrize("live", (False, True), ids=("non-live", "live"))
+    def test_seatbelt_checks_only_the_live_models_name(self, crew, tmp_path, monkeypatch, live):
+        from pathlib import Path
 
-        _, cleanup = sandbox.wrap_argv(argv, **options)
+        host_home = tmp_path / "host"
+        host_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: host_home)
+        legacy = host_home / ".kirocrew"
+        legacy.mkdir()
+        monkeypatch.setattr(sandbox, "_masked_crew_home_roots", lambda: [str(crew), str(legacy)])
+        monkeypatch.setattr(sandbox, "_resolve_agent_executable", lambda path: path)
+        root = crew if live else legacy
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        alias = root / "models"
+        alias.symlink_to(elsewhere, target_is_directory=True)
 
-        if cleanup is not None:
-            os.unlink(cleanup)
-        assert linked.samefile(outside)
-        assert linked.read_bytes() == outside.read_bytes() == b"original"
+        if live:
+            with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
+                sandbox.sandbox_exec_argv(["agent"])
+            assert str(alias) in str(exc.value)
+        else:
+            _, cleanup = sandbox.sandbox_exec_argv(["agent"])
+            if cleanup is not None:
+                os.unlink(cleanup)
+        assert alias.is_symlink()
 
-    @pytest.mark.parametrize("branch", _UNCHECKED_BRANCHES)
-    @pytest.mark.parametrize("alias_kind", ("symlink", "hardlink"))
-    def test_unconfined_branches_do_not_refuse_loader_alias(
+    @pytest.mark.parametrize("branch", _UNSEALED_BRANCHES)
+    @pytest.mark.parametrize("alias_kind", ("linked-models", "linked-step", "symlink", "hardlink"))
+    def test_unsealed_branches_do_not_refuse_a_model_alias(
         self, crew, loader_files, tmp_path, wrap_branch, branch, alias_kind
     ):
-        # No Kiro Crew seal: nothing of Kiro Crew's confines a models write, so a
-        # symlinked or hard-linked loader file must not newly refuse the spawn
-        # (that would brick sandbox-off, no-backend and delegated hosts).
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = loader_files[0]
-        linked.parent.mkdir(parents=True)
-        if alias_kind == "symlink":
-            linked.symlink_to(outside)
-        else:
-            os.link(outside, linked)
+        # No Kiro Crew seal: nothing of Kiro Crew's confines a models write, so an
+        # alias must not newly refuse the spawn (that would brick sandbox-off,
+        # no-backend and delegated hosts).
+        alias = self._plant(crew, loader_files, tmp_path, alias_kind)
         argv, options = wrap_branch(branch)
 
         argv_out, cleanup = sandbox.wrap_argv(argv, **options)
 
         assert cleanup is None
         assert argv_out[-len(argv) :] == argv
-        assert linked.is_symlink() if alias_kind == "symlink" else linked.samefile(outside)
+        assert alias.is_symlink() if alias_kind != "hardlink" else alias.stat().st_nlink == 2
 
-    @pytest.mark.parametrize("branch", _CHECKED_BRANCHES)
-    def test_every_sealed_branch_checks_models_once(self, crew, wrap_branch, monkeypatch, branch):
+    @pytest.mark.parametrize("branch", _SEALED_BRANCHES)
+    def test_no_sealed_branch_walks_the_model_steps(self, crew, wrap_branch, branch):
         from unittest.mock import patch
 
         argv, options = wrap_branch(branch)
+        with patch.object(sandbox, "require_real_model_path") as walked:
+            _, cleanup = sandbox.wrap_argv(argv, **options)
+        if cleanup is not None:
+            os.unlink(cleanup)
+        walked.assert_not_called()
+
+    def test_the_seatbelt_branch_checks_the_models_name_once(self, crew, wrap_branch):
+        from unittest.mock import patch
+
+        argv, options = wrap_branch("seatbelt")
         with patch.object(
-            sandbox,
-            "_refuse_aliased_model_descendants",
-            wraps=sandbox._refuse_aliased_model_descendants,
+            sandbox, "_refuse_linked_models_leaf", wraps=sandbox._refuse_linked_models_leaf
         ) as checked:
             _, cleanup = sandbox.wrap_argv(argv, **options)
         if cleanup is not None:
             os.unlink(cleanup)
         checked.assert_called_once_with()
 
-    @pytest.mark.parametrize("branch", _UNCHECKED_BRANCHES)
-    def test_unconfined_branches_never_check_models(self, crew, wrap_branch, branch):
+    @pytest.mark.parametrize("branch", ("namespace", *_UNSEALED_BRANCHES))
+    def test_other_branches_never_ask_the_seatbelt_question(self, crew, wrap_branch, branch):
         from unittest.mock import patch
 
         argv, options = wrap_branch(branch)
-        with patch.object(sandbox, "_refuse_aliased_model_descendants") as checked:
-            sandbox.wrap_argv(argv, **options)
+        with patch.object(sandbox, "_refuse_linked_models_leaf") as checked:
+            _, cleanup = sandbox.wrap_argv(argv, **options)
+        if cleanup is not None:
+            os.unlink(cleanup)
         checked.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "entry", ("wrap_argv_async", "sandboxed_spawn_argv", "sandboxed_spawn_argv_async")
     )
-    async def test_spawn_entry_points_check_models_once(self, crew, wrap_branch, entry):
+    async def test_spawn_entry_points_build_over_a_linked_step(
+        self, crew, loader_files, tmp_path, wrap_branch, entry
+    ):
         import asyncio
-        from unittest.mock import patch
 
+        alias = self._plant(crew, loader_files, tmp_path, "linked-step")
         _, options = wrap_branch("namespace")
         # sandboxed_spawn_argv_async has no Kiro classification argument.
         options.pop("is_kiro_cli")
-        with patch.object(
-            sandbox,
-            "_refuse_aliased_model_descendants",
-            wraps=sandbox._refuse_aliased_model_descendants,
-        ) as checked:
-            prepare = getattr(sandbox, entry)
-            if entry == "sandboxed_spawn_argv":
-                result = await asyncio.to_thread(prepare, ["agent"], **options)
-            else:
-                result = await prepare(["agent"], **options)
+        prepare = getattr(sandbox, entry)
+        if entry == "sandboxed_spawn_argv":
+            result = await asyncio.to_thread(prepare, ["agent"], **options)
+        else:
+            result = await prepare(["agent"], **options)
         if result[-1] is not None:
             os.unlink(result[-1])
-        checked.assert_called_once_with()
+        assert alias.is_symlink()
 
-    def test_failed_darwin_delegation_checks_models_before_audit_and_on_seatbelt_fallback(
+    def test_failed_darwin_delegation_checks_the_models_name_once_on_the_seatbelt_fallback(
         self, crew, wrap_branch, monkeypatch
     ):
         # The hand-off itself does not check; when its audit fails, macOS falls
-        # back to its own Seatbelt, whose builder checks the model paths once.
+        # back to its own Seatbelt, whose builder checks the models name once.
         from unittest.mock import MagicMock, patch
 
         argv, options = wrap_branch("darwin-delegated")
@@ -821,16 +931,14 @@ class TestModelLoaderPaths:
         audit.log_tool_invocation.side_effect = RuntimeError("audit unavailable")
         monkeypatch.setattr("kiro_crew.sel.sel", lambda: audit)
         with patch.object(
-            sandbox,
-            "_refuse_aliased_model_descendants",
-            wraps=sandbox._refuse_aliased_model_descendants,
+            sandbox, "_refuse_linked_models_leaf", wraps=sandbox._refuse_linked_models_leaf
         ) as checked:
             _, cleanup = sandbox.wrap_argv(argv, **options)
         if cleanup is not None:
             os.unlink(cleanup)
         checked.assert_called_once_with()
 
-    def test_failed_windows_delegation_checks_models_then_fails_closed(
+    def test_failed_windows_delegation_fails_closed_without_a_model_check(
         self, crew, wrap_branch, monkeypatch
     ):
         # Windows has no Kiro Crew backend, so a failed delegation audit falls
@@ -842,7 +950,7 @@ class TestModelLoaderPaths:
         audit = MagicMock()
         audit.log_tool_invocation.side_effect = RuntimeError("audit unavailable")
         monkeypatch.setattr("kiro_crew.sel.sel", lambda: audit)
-        with patch.object(sandbox, "_refuse_aliased_model_descendants") as checked:
+        with patch.object(sandbox, "_refuse_linked_models_leaf") as checked:
             with pytest.raises(sandbox.SandboxUnavailableError):
                 sandbox.wrap_argv(argv, **options)
         checked.assert_not_called()
@@ -855,11 +963,7 @@ class TestModelLoaderPaths:
         # loader file must not refuse it: the hand-off is audited and the link kept.
         from unittest.mock import MagicMock
 
-        outside = tmp_path / "weights"
-        outside.write_bytes(b"original")
-        linked = loader_files[0]
-        linked.parent.mkdir(parents=True)
-        linked.symlink_to(outside)
+        linked = self._plant(crew, loader_files, tmp_path, "symlink")
         argv, options = wrap_branch(branch)
         audit = MagicMock()
         monkeypatch.setattr("kiro_crew.sel.sel", lambda: audit)
@@ -875,118 +979,6 @@ class TestModelLoaderPaths:
             if call.kwargs.get("outcome") == "delegated"
         ]
         assert len(delegated) == 1
-
-    def test_bounded_metadata_only_check(self, crew, loader_files, monkeypatch):
-        for path in loader_files:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"original")
-        real_lstat = os.lstat
-        inspected = []
-
-        def lstat(path, *args, **kwargs):
-            inspected.append(os.fspath(path))
-            return real_lstat(path, *args, **kwargs)
-
-        def no_enumeration(*args, **kwargs):
-            pytest.fail("model check must not enumerate directories")
-
-        with monkeypatch.context() as patcher:
-            patcher.setattr(sandbox.os, "lstat", lstat)
-            patcher.setattr(sandbox.os, "scandir", no_enumeration)
-            patcher.setattr(sandbox.os, "walk", no_enumeration)
-            sandbox._refuse_aliased_model_descendants()
-        expected = {
-            str(crew.joinpath(*path.relative_to(crew).parts[:depth]))
-            for path in loader_files
-            for depth in range(1, len(path.relative_to(crew).parts) + 1)
-        }
-        assert set(inspected) == expected
-        assert len(inspected) <= sum(len(path.relative_to(crew).parts) for path in loader_files)
-
-    def test_missing_tree_passes_without_creating_it(self, crew):
-        sandbox._refuse_aliased_model_descendants()
-        assert not (crew / "models").exists()
-
-    @pytest.mark.parametrize("failure", (PermissionError, FileNotFoundError))
-    @pytest.mark.parametrize("intermediate", (False, True))
-    def test_lstat_failure_skips_file(
-        self, crew, loader_files, monkeypatch, caplog, failure, intermediate
-    ):
-        import logging
-
-        weights = loader_files[1]
-        weights.parent.mkdir(parents=True)
-        weights.write_bytes(b"original")
-        failing = weights.parent if intermediate else weights
-        real_lstat = os.lstat
-        inspected = []
-
-        def lstat(path, *args, **kwargs):
-            inspected.append(os.fspath(path))
-            if os.fspath(path) == str(failing):
-                raise failure("cannot inspect\nmodel\x1b[31m")
-            return real_lstat(path, *args, **kwargs)
-
-        with monkeypatch.context() as patcher:
-            patcher.setattr(sandbox.os, "lstat", lstat)
-            with caplog.at_level(logging.WARNING, logger=sandbox.__name__):
-                sandbox._refuse_aliased_model_descendants()
-        assert str(failing) in inspected
-        if intermediate:
-            assert str(weights) not in inspected
-        messages = [
-            record.getMessage() for record in caplog.records if record.name == sandbox.__name__
-        ]
-        if failure is FileNotFoundError:
-            assert not messages
-        else:
-            assert any(str(failing) in message for message in messages)
-            assert all("\n" not in message and "\x1b" not in message for message in messages)
-
-    def test_symlink_diagnostic_escapes_terminal_controls(self, crew, loader_files, monkeypatch):
-        unusual = crew / "line\nbreak\x1b[31m"
-        monkeypatch.setattr(sandbox, "config_dir", lambda: unusual)
-        link = unusual / loader_files[0].relative_to(crew)
-        link.parent.mkdir(parents=True)
-        link.symlink_to("missing\n\x1b[31mtarget")
-
-        with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
-            sandbox._refuse_aliased_model_descendants()
-
-        assert "\n" not in str(exc.value)
-        assert "\x1b" not in str(exc.value)
-        assert "target" in str(exc.value)
-        assert link.is_symlink()
-
-    @pytest.mark.parametrize("backend", ("namespace_argv", "sandbox_exec_argv"))
-    @pytest.mark.parametrize("live", (False, True), ids=("non-live", "live"))
-    def test_both_backends_check_only_live_home(
-        self, crew, loader_files, tmp_path, monkeypatch, backend, live
-    ):
-        from pathlib import Path
-
-        host_home = tmp_path / "host"
-        host_home.mkdir()
-        monkeypatch.setattr(Path, "home", lambda: host_home)
-        legacy = host_home / ".kirocrew"
-        monkeypatch.setattr(sandbox, "_masked_crew_home_roots", lambda: [str(crew), str(legacy)])
-        monkeypatch.setattr(sandbox, "_resolve_agent_executable", lambda path: path)
-        monkeypatch.setattr(sandbox, "_materialize_sealable_ceilings", lambda *args: [])
-        root = crew if live else legacy
-        alias = root / loader_files[1].relative_to(crew)
-        alias.parent.mkdir(parents=True)
-        outside = tmp_path / "outside"
-        outside.write_bytes(b"original")
-        alias.symlink_to(outside)
-
-        if live:
-            with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
-                getattr(sandbox, backend)(["agent"])
-            assert str(alias) in str(exc.value)
-        else:
-            assert getattr(sandbox, backend)(["agent"])
-        assert alias.is_symlink()
-        assert outside.read_bytes() == b"original"
 
 
 @_POSIX_ONLY
@@ -1090,6 +1082,60 @@ class TestTheWhisperLoaderRefusesAnAliasedFile:
         assert "refused" not in store.status
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ("models", "whisper"))
+    async def test_a_linked_step_refuses_the_load_without_downloading(
+        self, pinned, tmp_path, monkeypatch, step
+    ):
+        # Every following stat passes and the O_NOFOLLOW open sees a real leaf, so only
+        # the walk from models down sees the link. It refuses this model's load, with the
+        # documented refused status naming the link, and downloads nothing through it.
+        from kiro_crew.stt import models
+
+        store, model, path, payload = pinned
+        linked = path.parent if step == "whisper" else path.parent.parent
+        elsewhere = tmp_path / "elsewhere"
+        linked.rename(elsewhere)
+        linked.symlink_to(elsewhere, target_is_directory=True)
+        monkeypatch.setattr(
+            models,
+            "_download_blocking",
+            lambda *a, **k: pytest.fail("a refused path must not be downloaded through"),
+        )
+
+        assert await store.ensure(model) is None
+
+        assert store.status["step"] == "failed"
+        assert store.status.get("refused") is True
+        assert str(linked) in str(store.status["error"])
+        assert "JUNCTION" in str(store.status["error"])
+        assert linked.is_symlink()
+        assert path.read_bytes() == payload
+
+    @pytest.mark.asyncio
+    async def test_a_linked_step_refuses_before_the_model_is_downloaded(
+        self, pinned, tmp_path, monkeypatch
+    ):
+        # The same link with no file behind it yet: the download would write the weights
+        # into a tree the seal does not cover, so the load refuses before it starts.
+        from kiro_crew.stt import models
+
+        store, model, path, _ = pinned
+        path.unlink()
+        elsewhere = tmp_path / "elsewhere"
+        path.parent.rename(elsewhere)
+        path.parent.symlink_to(elsewhere, target_is_directory=True)
+        monkeypatch.setattr(
+            models,
+            "_download_blocking",
+            lambda *a, **k: pytest.fail("a refused path must not be downloaded through"),
+        )
+
+        assert await store.ensure(model) is None
+
+        assert store.status.get("refused") is True
+        assert not any(elsewhere.iterdir())
+
+    @pytest.mark.asyncio
     async def test_a_hardlinked_file_refuses_the_load_and_keeps_the_bytes(self, pinned, tmp_path):
         store, model, path, payload = pinned
         alias = tmp_path / "alias"
@@ -1144,6 +1190,88 @@ class TestTheWhisperLoaderRefusesAnAliasedFile:
 
         opened = path.stat()
         assert seen["judged"][:4] == (opened.st_mode, opened.st_ino, opened.st_dev, opened.st_nlink)
+
+    @pytest.fixture
+    def racing_read(self, monkeypatch):
+        """Patch the hash loop's ``os.read`` to run *race* once, after the first chunk.
+
+        A small chunk size makes the pinned payload take several reads, so the race lands
+        in a chunk that is ALREADY hashed: the digest of what was read stays the pinned
+        one while the file itself changes.
+        """
+        from kiro_crew.stt import models
+
+        monkeypatch.setattr(models, "_CHUNK_BYTES", 4)
+        real_read = os.read
+        calls = {"reads": 0}
+
+        def arm(race):
+            def read(fd, size):
+                calls["reads"] += 1
+                if calls["reads"] == 2:
+                    race()
+                return real_read(fd, size)
+
+            monkeypatch.setattr(models.os, "read", read)
+            return calls
+
+        return arm
+
+    @pytest.mark.asyncio
+    async def test_an_alias_written_and_unlinked_mid_hash_refuses_before_any_read(
+        self, pinned, tmp_path, racing_read
+    ):
+        # The race a judgement only at the END of the read loses: write through the alias
+        # into a hashed chunk, unlink the alias, and the final fstat sees one link while
+        # the digest still matches the pin. Judged before the first read, the alias that
+        # exists when verification starts refuses, and no byte is read through it.
+        store, model, path, payload = pinned
+        alias = tmp_path / "alias"
+        os.link(path, alias)
+
+        def race():
+            with open(alias, "r+b") as handle:
+                handle.write(b"FORG")
+            alias.unlink()
+
+        calls = racing_read(race)
+
+        with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
+            await store._verified_on_disk(model)
+
+        assert str(path) in str(exc.value)
+        assert calls["reads"] == 0
+        assert alias.exists(), "the race never ran, so the operator's alias is untouched"
+        assert path.read_bytes() == payload
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="POSIX change times; Windows has no Kiro Crew seal"
+    )
+    @pytest.mark.asyncio
+    async def test_a_write_through_a_held_descriptor_mid_hash_refuses_the_load(
+        self, pinned, racing_read
+    ):
+        # No alias exists when verification starts, but a descriptor opened through one
+        # earlier is still held. A write through it into a hashed chunk leaves the digest
+        # of what was read equal to the pin; the inode's stamp moved, so the load refuses
+        # and the file is left for the operator rather than deleted or downloaded over.
+        store, model, path, payload = pinned
+        old = 1_000_000_000 * 1_000_000_000
+        os.utime(path, ns=(old, old))
+        held = os.open(path, os.O_RDWR)
+        try:
+            calls = racing_read(lambda: os.pwrite(held, b"FORG", 0))
+
+            with pytest.raises(sandbox.SandboxCeilingUnsealable) as exc:
+                await store._verified_on_disk(model)
+        finally:
+            os.close(held)
+
+        assert calls["reads"] >= 2
+        assert str(path) in str(exc.value)
+        assert "changed while it was being verified" in str(exc.value)
+        assert path.is_file()
+        assert path.read_bytes() == b"FORG" + payload[4:]
 
 
 def _unreachable(*args, **kwargs):
@@ -1219,7 +1347,13 @@ class TestASandboxedChildCannotMintAnAliasOfASealedLoaderFile:
         )
         try:
             done = subprocess.run(
-                argv, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120
+                argv,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=120,
+                cwd=tmp_path,
             )
         finally:
             if cleanup is not None:

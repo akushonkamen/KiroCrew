@@ -616,20 +616,18 @@ _CREW_READONLY_LEAVES: tuple[str, ...] = (
     # beneath this leaf: a private window opens only inside a HIDDEN tree. Such a
     # directory belongs under ``run`` as an ``extra_writable_dirs`` carve-out, as the
     # decision runtime's ``run/decisions/<id>`` does.
-    # The seal covers paths, so check the live home's bounded set of loader files on
-    # every spawn that builds a new sandbox boundary, and every delegated Kiro
-    # hand-off; a nested spawn inherits an outer boundary that was checked when it
-    # was built. That is the namespace and Seatbelt backends below, and the
-    # hand-off. Refuse symlinks and junctions at every component from models down:
-    # a bind seals the referent while the name stays replaceable in a writable
-    # parent. A hard link on a loader file is judged at the LOADER instead, on a
-    # descriptor: ``stt.models.ModelStore._verified_on_disk`` (digest, then reopen) and
-    # ``embeddings._model_file_stamp_unaliased`` (no digest; the stamp ties the mapped
-    # inode to the judged one) ask :func:`require_unaliased_model_file`, so an aliased
-    # file fails that one load rather than every sandboxed spawn
-    # on a host whose files legitimately carry a second name (stow, chezmoi,
-    # ``rsync --link-dest``). Non-loader names (including download staging) and
-    # non-live homes are untouched.
+    # The seal covers paths, so an alias of a loader file is judged at the LOADER, and
+    # fails that one load rather than every sandboxed spawn on the host. A link at a
+    # step below models sits inside the seal, so only the host can have made it, and
+    # it threatens only the bytes a loader reads. Each loader asks
+    # ``require_real_model_path`` (no symlink or junction at any step from models to
+    # the file) and ``require_unaliased_model_file`` (no second hard link on the
+    # descriptor it reads): whisper in ``stt.models.ModelStore``, the GGUF in
+    # ``embeddings._model_file_stamp_unaliased``. The decoder runs only a snapshot
+    # whose bytes it re-hashes. A symlink or junction at the models NAME itself
+    # refuses the spawn on both backends: the namespace builder through
+    # ``_CREW_NOFOLLOW_READONLY_DIR_LEAVES``, Seatbelt through
+    # ``_refuse_linked_models_leaf``.
     "models",
     # The hosts a reader allowed long-query links for, per workspace. Every entry
     # relaxes the exfiltration check for that host, so a writable list lets a
@@ -2455,66 +2453,98 @@ def _refuse_if_symlink_leaf(target: str) -> None:
         )
 
 
-def _refuse_aliased_model_descendants() -> None:
-    """Check only the live home's bounded set of loader paths, without reading bytes.
+def _is_link_or_junction(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or platform_compat.lstat_is_name_surrogate(info)
 
-    Both backend seals cover paths, not inodes. Run on every spawn that builds a
-    new Kiro Crew sandbox boundary; a nested spawn inherits an outer boundary that
-    was checked when it was built. Concretely: the Linux namespace and macOS
-    Seatbelt backends -- never on a delegated Kiro hand-off or an unconfined
-    spawn, neither of which applies a Kiro Crew seal over ``models`` for an alias
-    to defeat. Refuse a symlink or junction at any component from ``models`` through
-    a loader file, without following or removing it. A HARD LINK is not judged
-    here: it is judged at each loader, on a descriptor, through
-    :func:`require_unaliased_model_file` (``stt.models.ModelStore._verified_on_disk``
-    for whisper, ``embeddings._model_file_stamp_unaliased`` for the GGUF). That is both
-    the narrower blast radius
-    -- one load fails rather than every sandboxed spawn on a host whose files
-    legitimately carry a second name -- and the stronger answer, because a
-    descriptor ties the judgement to the inode the bytes came from while a name
-    check here and an ``open`` in the loader are two separate resolutions. Missing
-    files are normal during download/replace; other stat errors warn and skip that
-    file.
-    Non-loader names (including download staging) and non-live homes are untouched.
+
+def _refuse_linked_models_leaf() -> None:
+    """Refuse a sealed spawn when the live ``models`` NAME is a symlink or junction.
+
+    The Seatbelt builder's half of the strict-name rule the namespace builder applies
+    to every entry of :data:`_CREW_NOFOLLOW_READONLY_DIR_LEAVES` in
+    :func:`_materialize_sealable_ceilings`; Seatbelt has no such pass, so it asks here.
+    The name lives in the writable data home, so a deny rule written for it covers the
+    link and leaves the tree it points at open, and a sandboxed process can write the
+    weights there. Steps BELOW the name are not checked here: they sit inside the seal,
+    so only the host can have linked one, and the loader that reads the file judges them
+    (:func:`require_real_model_path`), failing that one load rather than every spawn.
+    Metadata only; the link is neither followed nor removed.
     """
-    # circular import (pre-emptive, layering): embeddings and stt.models import this
-    # module lazily at load time, and a module-scope import here would pull both model
-    # subsystems into every importer of the sandbox.
-    from kiro_crew.embeddings import _GGUF_FILENAME
-    from kiro_crew.stt import decoder, models
+    target = os.path.join(str(config_dir()), "models")
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise SandboxCeilingUnsealable(
+            f"cannot stat the sealed model directory {safe_terminal_line(target)} to check "
+            f"for a symlink: {safe_terminal_line(str(exc))}"
+        ) from exc
+    if _is_link_or_junction(info):
+        raise SandboxCeilingUnsealable(
+            f"the sealed model directory {safe_terminal_line(target)} is a SYMLINK or "
+            f"JUNCTION -> {_symlink_target_display(target)}. The seal would cover the link "
+            "and leave the tree it points at writable from the sandbox. Make models a real "
+            "directory; to put the weights on another disk, relocate the whole data home "
+            "(KIROCREW_HOME), so the seal covers them."
+        )
 
-    root = str(config_dir())
-    loader_paths: list[tuple[str, ...]] = [("models", _GGUF_FILENAME)]
-    loader_paths.extend(("models", "whisper", model.filename) for model in models.CATALOG)
-    artifact = decoder.artifact_for()
-    if artifact is not None:
-        loader_paths.append(("models", decoder._STORE_DIRNAME, artifact.filename))
-    for parts in loader_paths:
-        target = root
-        for part in parts:
-            target = os.path.join(target, part)
-            try:
-                info = os.lstat(target)
-            except FileNotFoundError:
-                break
-            except OSError as exc:
-                logger.warning(
-                    "sandbox: cannot stat the sealed model path %s: %s; skipping this loader file.",
-                    safe_terminal_line(target),
-                    safe_terminal_line(str(exc)),
-                )
-                break
-            if stat.S_ISLNK(info.st_mode) or platform_compat.lstat_is_name_surrogate(info):
-                pointed_at = "(unreadable)"
-                with contextlib.suppress(OSError):
-                    pointed_at = os.readlink(target)
-                raise SandboxCeilingUnsealable(
-                    f"the sealed model path {safe_terminal_line(target)} is a SYMLINK or "
-                    f"JUNCTION -> {safe_terminal_line(pointed_at)}. The seal covers paths, "
-                    "so its target could remain writable outside the model tree. Keep the "
-                    "weights as real files under models/; to put them on another disk, "
-                    "relocate the whole data home (KIROCREW_HOME), so the seal covers them."
-                )
+
+def require_real_model_path(path: str, *, models_root: str) -> None:
+    """Refuse a model LOAD when any name from *models_root* down to *path* is a link.
+
+    PUBLIC, and called by each loader that reads weights from the sealed ``models``
+    tree before it opens the file: whisper's ``stt.models.ModelStore._accept_existing``
+    (so a link refuses the verify and a download through it alike) and the GGUF's
+    ``embeddings._model_file_stamp_unaliased``. The decoder needs no call: the bytes it
+    runs are a snapshot ``transcribe._authenticated_ffmpeg`` re-hashes after copying.
+
+    Both backend seals cover paths, not inodes, so a symlink or junction anywhere on the
+    way leaves the bytes the loader reads at a target the seal may not cover. A step
+    below ``models`` sits inside the seal, so only the host can have made such a link,
+    and it threatens only this file's bytes; refusing here fails this one load, where a
+    check on the spawn path would refuse every sealed spawn on the host. The ``models``
+    name itself is walked too, and also refuses the spawn
+    (:func:`_refuse_linked_models_leaf`), because that name sits in the writable data
+    home. A HARD LINK on the file is judged on the loader's descriptor instead
+    (:func:`require_unaliased_model_file`), and the loader's ``O_NOFOLLOW`` open
+    refuses a leaf that becomes a link after this walk.
+
+    Metadata only: ``lstat`` per name, nothing followed, read or removed. A missing
+    name ends the walk (the loader then finds no file, or downloads one); a name that
+    cannot be stat'ed refuses this load. A path outside *models_root* is not the
+    seal's and is not checked.
+    """
+    root = os.path.normpath(models_root)
+    try:
+        relative = os.path.relpath(os.path.normpath(path), root)
+    except ValueError:  # different Windows drives: not under the models tree
+        return
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return
+    steps = [] if relative == os.curdir else relative.split(os.sep)
+    targets = [root]
+    for step in steps:
+        targets.append(os.path.join(targets[-1], step))
+    for target in targets:
+        try:
+            info = os.lstat(target)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise SandboxCeilingUnsealable(
+                f"cannot stat the sealed model path {safe_terminal_line(target)} to check "
+                f"for a link: {safe_terminal_line(str(exc))}. This model is not loaded."
+            ) from exc
+        if _is_link_or_junction(info):
+            raise SandboxCeilingUnsealable(
+                f"the sealed model path {safe_terminal_line(target)} is a SYMLINK or "
+                f"JUNCTION -> {_symlink_target_display(target)}. The seal covers paths, so "
+                "its target could remain writable outside the model tree, and this model "
+                "is not loaded. Replace the link with a real directory or file under "
+                "models/; to put the weights on another disk, relocate the whole data home "
+                "(KIROCREW_HOME), so the seal covers them."
+            )
 
 
 def _require_real_dir_nofollow(target: str) -> None:
@@ -3083,8 +3113,8 @@ def require_unaliased_model_file(path: str, *, fd: int) -> None:
     check-then-use. The judgement lands on the inode the digest was computed from, so a swap
     at the name between the hash and this call cannot put un-judged content in front of the
     loader. There is deliberately no by-name mode: ``O_NOFOLLOW`` on the loader's own open
-    already refuses a symlinked leaf, reported as this same exception, and the spawn-path check
-    (:func:`_refuse_aliased_model_descendants`) is what refuses a symlink or junction at the
+    already refuses a symlinked leaf, reported as this same exception, and the loader's own
+    walk (:func:`require_real_model_path`) is what refuses a symlink or junction at the
     directory components above it.
 
     Refuses the LOAD, not the spawn. The blast radius of refusing here is one model load on a
@@ -3092,10 +3122,14 @@ def require_unaliased_model_file(path: str, *, fd: int) -> None:
     sandboxed spawn on that host, which is the whole box for one file's exposure.
 
     What this does NOT close: an alias that existed earlier, was written through, and was
-    unlinked before the hash leaves a lone regular file holding forged bytes, and no
-    ``fstat`` rule can see that an inode once had a second name. The seal and the file-write
-    gate are what keep the agent from creating the alias at all; this is what stops bytes
-    being consumed through one that already exists.
+    unlinked before the check leaves a lone regular file holding forged bytes, and no
+    ``fstat`` rule can see that an inode once had a second name; the whisper digest catches
+    those bytes, and the GGUF has no digest at load. Nor does it see a descriptor opened
+    through such an alias and still held. The whisper verifier judges before its first read
+    and refuses an inode stamp that moves during the read, but a write through a held
+    descriptor after the hash and before the native loader reopens the path is not seen.
+    The seal and the file-write gate are what keep the agent from creating the alias at
+    all; this is what stops bytes being consumed through one that already exists.
     """
     _require_real_file_nofollow(
         path,
@@ -8012,7 +8046,6 @@ def namespace_argv(
     # with a keystone the seal could not cover.
     _required_targets: list[str] = []
     _materialize_sealable_ceilings(_required_targets)
-    _refuse_aliased_model_descendants()
     # The mask loop has the same guard (``isdir``), so the on-demand hidden
     # directories get the same treatment for the same reason.
     _materialize_maskable_dirs(_required_targets)
@@ -8706,8 +8739,8 @@ def sandbox_exec_argv(
     if resolved_argv:
         resolved_argv[0] = _resolve_agent_executable(resolved_argv[0])
 
-    # Seatbelt's path denies cannot cover an alias outside the model tree either.
-    _refuse_aliased_model_descendants()
+    # A Seatbelt deny on a linked models name covers the link, not the tree it points at.
+    _refuse_linked_models_leaf()
     # A pre-upgrade md-notebook staging temp holding the PAT sits at a name this profile
     # never denies (it names the state leaves and the staging directory, not an arbitrary
     # ``*.tmp`` sibling), so removing it is NOT Linux-only work. File materialisation

@@ -1409,7 +1409,9 @@ export default function MembersPage() {
   // so; the create itself is never in doubt here (the server has the
   // crewmate), so the dialog does not reopen.
   const [postCreateError, setPostCreateError] = useState<
-    | { kind: 'roster'; created: CreatedCrewmate }
+    // `stay`: the user had already chosen another chat when the create
+    // landed, so the retry only re-reads the roster and opens nothing.
+    | { kind: 'roster'; created: CreatedCrewmate; stay?: boolean }
     | null
   >(null)
   // Mirror for the thread mutation's callbacks, which must read the CURRENT
@@ -3213,6 +3215,17 @@ export default function MembersPage() {
     setSearchParams({ [MEMBER_PARAM]: created.name }, { replace: true })
   }, [rosterQuery, openMember, setSearchParams, queryClient])
 
+  // The roster re-read for a create the user already left: the chat they
+  // chose stays open. A re-read that did not land (an error, or a cancelled
+  // refetch that reverted to the pre-create roster, see `openCreated`) is
+  // reported through the same notice, whose retry repeats only this read.
+  const listCreated = useCallback(async (created: CreatedCrewmate) => {
+    const before = queryClient.getQueryState(MEMBERS_ROSTER_QUERY_KEY)?.dataUpdatedAt ?? 0
+    const res = await rosterQuery.refetch()
+    if (!pageMounted.current) return
+    if (res.isError || res.dataUpdatedAt <= before) setPostCreateError({ kind: 'roster', created, stay: true })
+  }, [rosterQuery, queryClient])
+
   const handleCreated = useCallback((created: CreatedCrewmate) => {
     // The form's work is done: the open that follows must not ask to leave it.
     createOpenRef.current = false
@@ -3220,18 +3233,18 @@ export default function MembersPage() {
     if (leftCreateRef.current) {
       // The user already chose another chat: list the new crewmate, stay put.
       leftCreateRef.current = false
-      void rosterQuery.refetch()
+      void listCreated(created)
       return
     }
     void openCreated(created)
-  }, [openCreated, rosterQuery])
+  }, [openCreated, listCreated])
 
   const retryPostCreate = useCallback(() => {
     const failed = postCreateError
     if (!failed) return
     setPostCreateError(null)
-    void openCreated(failed.created)
-  }, [postCreateError, openCreated])
+    void (failed.stay ? listCreated(failed.created) : openCreated(failed.created))
+  }, [postCreateError, openCreated, listCreated])
 
   // URL -> open crewmate. Once the roster is in: a URL that names a crewmate
   // opens it; a URL that names none (a fresh visit, the sidebar entry, a

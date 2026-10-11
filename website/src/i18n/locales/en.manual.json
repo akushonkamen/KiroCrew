@@ -1694,6 +1694,7 @@
       "react_retired_cue_note_picture": "Saved sounds on this crew ({{states}}) no longer play — a picture is silent. Switch to Ghost face to pick a sound again.",
       "react_sound": "Sound",
       "reset_default": "Reset avatar and reactions to default",
+      "use_original_look": "Use {{name}}'s own face",
       "sound_blip": "Blip",
       "sound_chime": "Chime",
       "sound_ding": "Ding",

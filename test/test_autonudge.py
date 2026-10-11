@@ -6690,8 +6690,12 @@ class TestPersistenceIsOffLoopAndOrdered:
         def _slow_write(payload):
             order.append("write-start")
             loop.call_soon_threadsafe(entered.set)
-            if not release.wait(2.0):
-                raise AssertionError("test did not release the writer")
+            # Block until the test releases, with no wall-clock margin: the gap
+            # between `entered` firing and `release.set()` is whatever the loop
+            # takes to deliver one cancel and run two asserts, which a loaded
+            # Windows shard can stretch past any fixed budget. The test's own
+            # `finally` always sets `release`, so an unbounded wait cannot hang.
+            release.wait()
             real_write(payload)
             order.append("write-done")
 

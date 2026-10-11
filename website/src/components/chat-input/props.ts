@@ -311,11 +311,22 @@ export interface ChatInputProps {
    *  Absent: mentions delete one character at a time, as before.
    *  KEYBOARD BACKSPACE/DELETE ONLY: it runs on the keydown, so a mention
    *  erased through the value-change seam — cut, typing over a selection, or
-   *  pasting over one — is NOT caught here (tracked in the #14675 follow-up).
+   *  pasting over one — is NOT caught here (handled by `mentionEditRange`).
    *  TEXTAREA ONLY: the plain-textarea composer passes the key here; the
    *  Lexical composer (`inlineMarkdown` on) edits a node model and does not
-   *  call this (also tracked in the #14675 follow-up). */
+   *  call this (tracked in #18186). */
   onMentionKey?: (text: string, selStart: number, selEnd: number, key: string, mods: MentionKeyMods) => { value: string; caret: number } | null
+  /** The value-change companion to `onMentionKey` (#18263), structural. A cut,
+   *  type-over, paste-over or drop erases part of a staged `@mention` through
+   *  the textarea's value-change seam, not a keydown. Given the pre-edit text
+   *  and the selection [s, e) the browser is about to replace (read at
+   *  `beforeinput`), this returns that range EXPANDED to cover the whole of
+   *  every staged mention it cuts into, or null when it touches none. The
+   *  composer then replaces the expanded range with the edit's own inserted
+   *  data via the controlled value, so a half-reference is never produced and
+   *  no after-the-fact text diff is needed. TEXTAREA ONLY, like `onMentionKey`;
+   *  the Lexical composer is tracked in #18186. */
+  mentionEditRange?: (text: string, selStart: number, selEnd: number) => { start: number; end: number } | null
   onFileOpen?: (path: string) => void
   project?: string
   /** Checked-out branch of the active project (or short SHA when detached). */

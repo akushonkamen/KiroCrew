@@ -182,6 +182,7 @@ function ChatInput({
   onTreeEntryDrop,
   clampDropOffset,
   onMentionKey,
+  mentionEditRange,
   onFileOpen,
   project,
   projectBranch,
@@ -557,7 +558,14 @@ function ChatInput({
     rawPasteRef, handleUndoKey, endUndoBurst, handleTokenKey, onMentionKey, promptOptimizer: promptOptimizer && !terminal.active, connected, optimizePrompt, sendOnEnter, onChange, valueFromUserRef, optimizingRef,
     fireComposer, ime, sentMessages, onEditLastRequest, anyPickerOpenRef, promptHistory, valueRef, inputRef, pasteBlocksRef,
   })
-  const { handleTextareaChange, handleLexicalChange } = useEditorInput({ onChange, valueFromUserRef, openPickersForText, recordCaret, lexicalControlRef, voiceCaretRef })
+  const { handleTextareaChange, handleLexicalChange, beforeInputRef } = useEditorInput({ onChange, valueFromUserRef, openPickersForText, recordCaret, lexicalControlRef, voiceCaretRef, mentionEditRange, inputRef })
+  // Compose the textarea ref: the existing wiring (autosize + list continuation)
+  // and the value-change seam's native `beforeinput` listener. Stable identity
+  // so the textarea's listeners are not detached/re-attached every render.
+  const composedTextareaRef = useCallback((textarea: HTMLTextAreaElement | null) => {
+    setComposerTextareaRef(textarea)
+    beforeInputRef(textarea)
+  }, [setComposerTextareaRef, beforeInputRef])
 
   const hasSessionRefs = pendingSessions.length > 0
   // A staged quote is a draft for the send gates below, but NOT a strip: it
@@ -1082,7 +1090,7 @@ function ChatInput({
             playwright/composer-paste-highlight.spec.ts pins the first and
             playwright/composer-paste-highlight-scrollbar.spec.ts the second. */}
         <textarea
-          ref={setComposerTextareaRef}
+          ref={composedTextareaRef}
           aria-label={inputAriaLabel ?? i18nT('components.chatInput.message_input')}
           data-composer-input=""
           spellCheck={spellCheck}

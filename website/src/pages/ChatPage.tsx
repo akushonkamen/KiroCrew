@@ -2844,7 +2844,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   const announceAttachmentChange = useCallback((text: string) => {
     setAttachmentAnnouncement(prev => ({ text, nonce: prev.nonce + 1 }))
   }, [])
-  const { clampOutOfTokens, handleAddToContext, removeFileChip, removeDirChip, selectPickedFile, mentionKeyEdit } = useFileMentionActions({
+  const { clampOutOfTokens, handleAddToContext, removeFileChip, removeDirChip, selectPickedFile, mentionKeyEdit, mentionEditRange } = useFileMentionActions({
     staging,
     inputRef,
     setInput,
@@ -6450,6 +6450,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               onTreeEntryDrop={handleAddToContext}
               clampDropOffset={clampOutOfTokens}
               onMentionKey={mentionKeyEdit}
+              mentionEditRange={mentionEditRange}
               project={currentSlot?.project || ''}
               projectBranch={projectBranch}
               projectDetached={!projectGitError && !!projectGit?.detached}

@@ -1505,10 +1505,12 @@ jobs:
             # otherwise end with this function. The fork Opus and GPT finalize
             # steps read it: a verdict computed for this head is a pass there only
             # once it is in the slot. `published` is this run's body in the slot,
-            # `superseded` a head this PR has moved past, `override` an accepted
-            # human override the write left standing, and `not_published` every
-            # other arm -- an earlier run's sample for this head included, because
-            # the PR then shows that sample and not this run's verdict.
+            # `superseded` a head this PR has moved past, and `not_published` every
+            # other arm. That includes an earlier run's sample for this head, which
+            # the PR then shows instead of this run's verdict, and an override note
+            # a repeat stopped at: that note names no head the repeat can check, and
+            # an override for THIS head is answered by the finalize step's own
+            # override input.
             local verdict_read_rc superseded="" publication="not_published"
             # Find the bot's existing marker comment (first match wins) and
             # capture its id. Author filter: only a github-actions[bot]
@@ -1703,7 +1705,6 @@ jobs:
             case "$write_rc" in
               0) publication="published" ;;
               4) publication="superseded" ;;
-              5) publication="override" ;;
             esac
             printf 'publication=%s\n' "$publication" >> "${GITHUB_OUTPUT:-/dev/null}"
           }

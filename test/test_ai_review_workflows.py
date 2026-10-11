@@ -12481,6 +12481,10 @@ class TestForkLaneSurfacesAnUnstampedReviewBody:
             "GH_TOKEN": "stub-token",
             "RUNNER_TEMP": str(runner_temp),
             "STUB_CALLS": str(calls_dir),
+            # The step records its publication outcome in GITHUB_OUTPUT, and
+            # the inherited value is the CI job's own file, which this test
+            # must neither write into nor depend on being writable.
+            "GITHUB_OUTPUT": str(tmp_path / "github-output.txt"),
             "CHECK_ID": check_id,
             "ADJ_DECISION": "",
             "ADJ_NOTE": "",
@@ -18368,32 +18372,46 @@ class TestForkRequiredLanePassesOnlyAPublishedVerdict:
         check_id: str = "4242",
         block: bool = False,
         adj_decision: str = "",
+        override: bool = False,
     ):
         bash = _bash()
-        if bash is None or os.name == "nt":
-            pytest.skip("the finalize step is Bash with a stubbed gh; POSIX only")
-        stub_dir = tmp_path / "stub"
-        stub_dir.mkdir()
+        assert bash is not None, "these cases need bash (Git Bash on Windows)"
         calls = tmp_path / "calls"
         calls.mkdir()
-        _write_stub(
-            stub_dir / "gh",
-            'if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "PATCH" ]; then\n'
-            f'  printf \'%s\\n\' "$@" >> "{calls}/patch-argv.txt"; exit 0\n'
-            "fi\n"
-            'if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ]; then\n'
-            f'  printf \'%s\\n\' "$@" >> "{calls}/post-argv.txt"; echo 1; exit 0\n'
-            "fi\n"
-            "exit 0\n",
+        # The stubs are shell FUNCTIONS sourced through BASH_ENV rather than
+        # scripts on PATH: Git for Windows' bash prepends its own bin directories
+        # to PATH, which would shadow a PATH stub. `jq` is the sweep's check-name
+        # encoder only, and its output feeds nothing but the `gh` stub.
+        stubs = tmp_path / "stubs.sh"
+        stubs.write_text(
+            "gh() {\n"
+            '  if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "PATCH" ]; then\n'
+            '    printf \'%s\\n\' "$@" >> "$STUB_CALLS/patch-argv.txt"; return 0\n'
+            "  fi\n"
+            '  if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ]; then\n'
+            '    printf \'%s\\n\' "$@" >> "$STUB_CALLS/post-argv.txt"; echo 1; return 0\n'
+            "  fi\n"
+            "  return 0\n"
+            "}\n"
+            "sleep() { :; }\n"
+            "jq() { :; }\n",
+            encoding="utf-8",
+            newline="\n",
         )
-        _write_stub(stub_dir / "sleep", "exit 0\n")
         cwd = tmp_path / "workspace"
         cwd.mkdir()
         body = f"[{stamp}-REVIEWED] {self.HEAD}\n"
         if block:
             body = f"BLOCKING -- src/a.py:1 -- x\n[BLOCK-MERGE] {self.HEAD}\n" + body
-        (cwd / out).write_text(body, encoding="utf-8")
+        (cwd / out).write_text(body, encoding="utf-8", newline="\n")
         env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": tmp_path.as_posix(),
+            "TMPDIR": tmp_path.as_posix(),
+            "GH_TOKEN": "stub-token",
+            "GH_CONFIG_DIR": (tmp_path / "gh-config").as_posix(),
+            "BASH_ENV": stubs.as_posix(),
+            "STUB_CALLS": calls.as_posix(),
             "REPO": "example/repo",
             "PR": "7",
             "HEAD": self.HEAD,
@@ -18402,9 +18420,9 @@ class TestForkRequiredLanePassesOnlyAPublishedVerdict:
             "WR_RUN_ATTEMPT": "2",
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_RUN_ID": "5551",
-            "RUNNER_TEMP": str(tmp_path),
-            "HUMAN_OVERRIDE": "false",
-            "OVERRIDE_ACTOR": "",
+            "RUNNER_TEMP": tmp_path.as_posix(),
+            "HUMAN_OVERRIDE": "true" if override else "false",
+            "OVERRIDE_ACTOR": "alice" if override else "",
             "ADJ_DECISION": adj_decision,
             "ADJ_NOTE": "",
         }
@@ -18421,26 +18439,28 @@ class TestForkRequiredLanePassesOnlyAPublishedVerdict:
             text=True,
             encoding="utf-8",
             cwd=cwd,
-            env=_fork_child_env(tmp_path, stub_dir, **env),
+            env=_child_env(env),
         )
         assert result.returncode == 0, _proc_log(result)
         row = "patch-argv.txt" if check_id else "post-argv.txt"
         return (calls / row).read_text(encoding="utf-8")
 
     @pytest.mark.parametrize(("workflow", "name", "out", "stamp"), LANES)
-    @pytest.mark.parametrize("publication", [None, "", "not_published", "withheld"])
+    @pytest.mark.parametrize("publication", [None, "", "not_published", "withheld", "override"])
     def test_a_clean_verdict_that_missed_the_slot_fails(
         self, tmp_path: Path, workflow: str, name: str, out: str, stamp: str, publication
     ) -> None:
         # No record at all is the post step failing or never running, and it
         # fails closed exactly like a record that says the write did not land.
+        # `override` is not a record the post step writes: an override for
+        # this head reaches the finalize step through its own input instead.
         argv = self._run(tmp_path, workflow, out, stamp, publication=publication)
         assert "conclusion=failure" in argv and "conclusion=success" not in argv, argv
         assert f"output[title]={name} — verdict not published" in argv, argv
         assert "Re-run this lane to publish it." in argv, argv
 
     @pytest.mark.parametrize(("workflow", "name", "out", "stamp"), LANES)
-    @pytest.mark.parametrize("publication", ["published", "superseded", "override"])
+    @pytest.mark.parametrize("publication", ["published", "superseded"])
     def test_a_published_verdict_keeps_its_own_conclusion(
         self, tmp_path: Path, workflow: str, name: str, out: str, stamp: str, publication: str
     ) -> None:
@@ -18465,6 +18485,20 @@ class TestForkRequiredLanePassesOnlyAPublishedVerdict:
         argv = self._run(tmp_path, workflow, out, stamp, publication="not_published", block=True)
         assert "conclusion=failure" in argv, argv
         assert f"output[title]={name} — changes requested (blocking)" in argv, argv
+
+    @pytest.mark.parametrize(("workflow", "name", "out", "stamp"), LANES)
+    @pytest.mark.parametrize("publication", [None, "not_published"])
+    def test_an_accepted_override_for_this_head_still_passes(
+        self, tmp_path: Path, workflow: str, name: str, out: str, stamp: str, publication
+    ) -> None:
+        # The override is decided AFTER the publication check, from its own
+        # input, so a skipped review with no publication record and a BLOCK
+        # left in the output file still completes the row success.
+        argv = self._run(
+            tmp_path, workflow, out, stamp, publication=publication, block=True, override=True
+        )
+        assert "conclusion=success" in argv and "conclusion=failure" not in argv, argv
+        assert f"output[title]={name} — human override accepted" in argv, argv
 
     def test_an_adjudicated_clearance_that_missed_the_slot_fails(self, tmp_path: Path) -> None:
         # The GPT lane's second way to a pass, a fully reconciled clearance,
@@ -18532,6 +18566,17 @@ class TestTheGuardedUpsertRecordsWhatReachedTheSlot:
         assert self._publication(lane, tmp_path, None) == "published"
 
     @pytest.mark.parametrize("lane", _GUARDED_LANE_PARAMS)
+    def test_a_rerun_replaces_an_earlier_sample_for_this_head(
+        self, lane: dict, tmp_path: Path
+    ) -> None:
+        # The remedy a `verdict not published` failure names. With the slot's
+        # lookup answering, a re-run on the same head takes the replace path,
+        # so the earlier sample is overwritten by this run's verdict.
+        assert self._publication(lane, tmp_path, self.HEAD) == "published"
+        patched = (tmp_path / "calls" / "patched-body.md").read_text(encoding="utf-8")
+        assert f"{lane['stamp']} {self.HEAD}" in patched, patched
+
+    @pytest.mark.parametrize("lane", _GUARDED_LANE_PARAMS)
     def test_a_lost_patch_is_not_published(self, lane: dict, tmp_path: Path) -> None:
         assert self._publication(lane, tmp_path, self.OLD, STUB_PATCH_FAIL="1") == "not_published"
 
@@ -18562,9 +18607,14 @@ class TestTheGuardedUpsertRecordsWhatReachedTheSlot:
         assert self._publication(lane, tmp_path, self.OLD, STUB_PR_HEAD=self.NEWER) == "superseded"
 
     @pytest.mark.parametrize("lane", _GUARDED_LANE_PARAMS)
-    def test_an_override_the_repeat_left_standing_is_recorded(
+    def test_an_override_note_a_repeat_stopped_at_is_not_this_runs(
         self, lane: dict, tmp_path: Path
     ) -> None:
+        # The repeat stops at any comment carrying an override note, and that
+        # note names no head the repeat can check: it may be an older head's.
+        # The slot then shows the note and not this run's verdict, so it is no
+        # pass for this head; an override that IS for this head reaches the
+        # finalize step through its own input.
         assert (
             self._publication(
                 lane,
@@ -18573,7 +18623,7 @@ class TestTheGuardedUpsertRecordsWhatReachedTheSlot:
                 STUB_PATCH_FAIL="1",
                 STUB_TARGET_BODY="## Lane -- ✅ human override accepted",
             )
-            == "override"
+            == "not_published"
         )
 
 

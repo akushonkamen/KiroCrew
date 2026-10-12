@@ -2457,7 +2457,7 @@ def disable_auto_merge(
 _WORKFLOW_RUN_JQ = (
     '.workflow_runs[] | {id: .id, name: (.name // .display_title // "workflow"), '
     "status: .status, conclusion: .conclusion, url: .html_url, "
-    "event: (.event // null), created_at: .created_at}"
+    "event: (.event // null), created_at: .created_at, attempt: (.run_attempt // 1)}"
 )
 
 # A run in one of these states has not finished, so cancelling it is meaningful.
@@ -2548,6 +2548,168 @@ def rerun_workflow_run(
         "POST", f"repos/{owner}/{repo}/actions/runs/{int(run_id)}/{verb}", None, timeout=timeout
     )
     return {"run_id": int(run_id), "rerun": True, "failed_only": bool(failed_only)}
+
+
+# ── CI-runs reads (the own-PR failure watch and the CI runs dashboard) ────────
+#
+# Both are READS through the user's existing ``gh`` session. The watcher calls
+# :func:`search_viewer_open_pull_heads` once per cycle for the repos that opted
+# in, then :func:`list_pr_workflow_runs` per head commit; the dashboard calls
+# :func:`list_recent_workflow_runs` only while its tab is open.
+
+# Owner/repo segments are charset-checked again here because they are spliced
+# into a search QUERY, where a space or a colon would add a qualifier.
+_SEARCH_REPO_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+
+#: Repos per search query. GitHub caps a search query at 256 characters, and a
+#: handful of ``repo:`` qualifiers keeps a query of long names under it.
+CI_SEARCH_REPOS_PER_QUERY = 5
+
+#: Open PRs read per search query (GitHub's own per-page cap is 100).
+CI_SEARCH_MAX_PULLS = 50
+
+_VIEWER_PULLS_QUERY = (
+    "query($q:String!,$n:Int!){ viewer{ login }"
+    " search(query:$q, type:ISSUE, first:$n){ nodes{ ... on PullRequest {"
+    " number title url headRefOid author{ login } repository{ nameWithOwner } } } } }"
+)
+
+_RECENT_RUN_JQ = (
+    '.workflow_runs[] | {id: .id, name: (.name // .display_title // "workflow"), '
+    "status: .status, conclusion: .conclusion, url: .html_url, "
+    "event: (.event // null), branch: (.head_branch // null), "
+    "head_sha: (.head_sha // null), attempt: (.run_attempt // 1), "
+    "pull_requests: [(.pull_requests // [])[] | .number], "
+    "created_at: .created_at, started_at: (.run_started_at // null), "
+    "updated_at: (.updated_at // null)}"
+)
+
+#: Most recent runs the dashboard lists per repo.
+CI_RECENT_RUNS_MAX = 50
+
+
+def search_viewer_open_pull_heads(
+    repos: list[tuple[str, str]], *, timeout: float = GH_TIMEOUT_SEC
+) -> dict:
+    """The signed-in user's open PRs across ``repos``, with each head commit.
+
+    Returns ``{"viewer": login, "pulls": [{owner, repo, number, title, url,
+    head_sha}]}``. One GraphQL search per :data:`CI_SEARCH_REPOS_PER_QUERY` repos,
+    scoped with ``author:@me``; a node whose author is not the viewer is dropped
+    as well, so a teammate's PR never reaches the caller whatever the search
+    returns. A repo segment outside the GitHub charset is skipped rather than
+    spliced into the query. Raises :class:`GhCliError` when ``gh`` fails.
+    """
+    valid = [
+        (o, r)
+        for o, r in repos
+        if _SEARCH_REPO_SEGMENT_RE.match(o or "") and _SEARCH_REPO_SEGMENT_RE.match(r or "")
+    ]
+    viewer: str | None = None
+    pulls: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for start in range(0, len(valid), CI_SEARCH_REPOS_PER_QUERY):
+        chunk = valid[start : start + CI_SEARCH_REPOS_PER_QUERY]
+        query = " ".join(
+            ["is:pr", "is:open", "archived:false", "author:@me", "sort:updated-desc"]
+            + [f"repo:{o}/{r}" for o, r in chunk]
+        )
+        argv = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={_VIEWER_PULLS_QUERY}",
+            "-f",
+            f"q={query}",
+            "-F",
+            f"n={CI_SEARCH_MAX_PULLS}",
+            "--jq",
+            ".data",
+        ]
+        proc = _gh_run(argv, timeout=timeout)
+        if proc.returncode != 0:
+            tail = _stderr_tail(proc)
+            _raise_if_auth_failure(tail)
+            raise GhCliError(f"gh api graphql (own pulls) failed (exit {proc.returncode}): {tail}")
+        try:
+            data = json.loads((proc.stdout or "").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise GhCliError("gh returned unexpected output for the own-pulls search") from exc
+        if not isinstance(data, dict):
+            raise GhCliError("gh returned unexpected output for the own-pulls search")
+        login = ((data.get("viewer") or {}).get("login") or "").strip()
+        if not login:
+            raise GhCliError("gh did not report the signed-in user")
+        viewer = login
+        nodes = ((data.get("search") or {}).get("nodes")) or []
+        for node in nodes:
+            row = _own_pull_row(node, login)
+            if row is None:
+                continue
+            ident = (f"{row['owner']}/{row['repo']}".lower(), row["number"])
+            if ident in seen:
+                continue
+            seen.add(ident)
+            pulls.append(row)
+    return {"viewer": viewer, "pulls": pulls}
+
+
+def _own_pull_row(node: object, viewer: str) -> dict | None:
+    """Normalize one search node, or ``None`` when it is not the viewer's PR."""
+    if not isinstance(node, dict):
+        return None
+    author = ((node.get("author") or {}).get("login") or "").strip()
+    if author.lower() != viewer.lower():
+        return None
+    number = node.get("number")
+    sha = node.get("headRefOid")
+    full = (node.get("repository") or {}).get("nameWithOwner") or ""
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        return None
+    if not isinstance(sha, str) or not re.match(r"^[0-9a-fA-F]{7,64}$", sha):
+        return None
+    owner, _, repo = str(full).partition("/")
+    if not owner or not repo:
+        return None
+    return {
+        "owner": owner,
+        "repo": repo,
+        "number": number,
+        "title": str(node.get("title") or ""),
+        "url": str(node.get("url") or ""),
+        "head_sha": sha,
+    }
+
+
+def list_recent_workflow_runs(
+    owner: str, repo: str, *, limit: int = 20, timeout: float = GH_TIMEOUT_SEC
+) -> list[dict]:
+    """The most recent GitHub Actions runs in a repo, newest first.
+
+    One page (``limit`` clamped to 1..:data:`CI_RECENT_RUNS_MAX`). Each row carries
+    status, conclusion, branch, the PR numbers GitHub links to the run (empty for
+    a run from a fork), and ``duration_sec`` from the run's start to its last
+    update (``None`` until it has started).
+    """
+    per_page = max(1, min(int(limit), CI_RECENT_RUNS_MAX))
+    rows = _run_gh_api(
+        f"repos/{owner}/{repo}/actions/runs?per_page={per_page}",
+        _RECENT_RUN_JQ,
+        timeout=timeout,
+        paginate=False,
+    )
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        started = _parse_gh_timestamp(row.get("started_at") or row.get("created_at"))
+        updated = _parse_gh_timestamp(row.get("updated_at"))
+        duration = None
+        if started is not None and updated is not None and updated >= started:
+            duration = int((updated - started).total_seconds())
+        out.append({**row, "duration_sec": duration})
+    return out[:per_page]
 
 
 # ── crew claim protocol (reading a claim back off the issue) ──────────────────

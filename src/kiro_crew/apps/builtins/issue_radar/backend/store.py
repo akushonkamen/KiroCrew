@@ -734,19 +734,25 @@ def set_repo_permissions(
 #   unlabeled_is_untriaged   also treat issues with no labels as needing triage
 #   good_first_issue_labels  names of labels that mark newcomer-friendly issues
 #   notify_on_new_issue      push a KiroCrew notification when a new issue opens
+#   notify_on_own_pr_ci_failure
+#                            push a KiroCrew notification when a GitHub Actions
+#                            run fails on an open pull request the signed-in
+#                            ``gh`` user authored
 #
 # Different repos use different conventions (``needs-triage`` vs ``status: triage``
 # vs just "no label"; ``good first issue`` vs ``help wanted`` vs ``beginner``),
 # so every field is per-repo and defaults to a safe, backwards-compatible value
 # (empty label sets + "unlabeled == untriaged", which is exactly the heuristic
-# the dashboards used before settings existed). ``notify_on_new_issue`` is
-# opt-in (default off): the background watcher only polls repos that turn it on.
+# the dashboards used before settings existed). Both ``notify_on_*`` toggles are
+# opt-in (default off): the background watcher makes a toggle's provider calls
+# only for the repos that turn it on.
 
 DEFAULT_REPO_SETTINGS: dict[str, Any] = {
     "triage_labels": [],
     "unlabeled_is_untriaged": True,
     "good_first_issue_labels": [],
     "notify_on_new_issue": False,
+    "notify_on_own_pr_ci_failure": False,
     # Local absolute path to this repo's working copy. Empty string means "use
     # the gateway's default cwd" (the pre-workspace behavior). Local-only, like
     # every other field here -- never written back to the source host. The
@@ -797,6 +803,7 @@ def _normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         "unlabeled_is_untriaged": bool(raw.get("unlabeled_is_untriaged", True)),
         "good_first_issue_labels": _labels("good_first_issue_labels"),
         "notify_on_new_issue": bool(raw.get("notify_on_new_issue", False)),
+        "notify_on_own_pr_ci_failure": bool(raw.get("notify_on_own_pr_ci_failure", False)),
         "workspace_path": workspace_path,
         # Monotonic per-repo counter, bumped by every write. A full-document PUT
         # carries the revision it read, so a write built on a snapshot that has
@@ -935,6 +942,70 @@ def write_watch_state(
         watch_state_path(owner, repo, root),
         json.dumps(
             {"owner": owner, "repo": repo, "last_seen_number": int(last_seen_number)},
+            indent=2,
+        ),
+    )
+
+
+# ── CI-failure watch state (own-PR workflow-run alerts) ────────────────────────
+#
+# For a repo with ``notify_on_own_pr_ci_failure`` on, the watcher records which
+# workflow-run attempts it has already reported, as ``{run_id: attempt}``. A run
+# notifies when its failed attempt is higher than the recorded one, so a re-run
+# that fails again notifies again and a repeated read of the same failure does
+# not. ``seeded`` is false until the first successful read, which records the
+# failures already present WITHOUT notifying, so turning the setting on does not
+# announce every red run already sitting on the user's open PRs.
+#
+# A separate file from ``watch-state.json``: that file is rewritten whole by the
+# new-issue pass, and the two passes are independent opt-ins.
+
+#: Most run ids remembered per repo. Ids are kept in insertion order and the
+#: oldest are dropped first; a run that old has long since left every open PR's
+#: head commit, so forgetting it cannot cause a repeat notification.
+CI_WATCH_MAX_RUNS = 500
+
+
+def ci_watch_state_path(owner: str, repo: str, root: Path | None = None) -> Path:
+    return repo_data_dir(owner, repo, root) / "ci-watch-state.json"
+
+
+def read_ci_watch_state(owner: str, repo: str, root: Path | None = None) -> dict[str, Any]:
+    """Return ``{"seeded": bool, "notified": {run_id: attempt}}`` for a repo.
+
+    An absent, unreadable or malformed file reads as unseeded with nothing
+    notified, so the next successful read seeds instead of announcing.
+    """
+    path = ci_watch_state_path(owner, repo, root)
+    data: Any = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    raw = data.get("notified")
+    notified: dict[str, int] = {}
+    if isinstance(raw, dict):
+        for run_id, attempt in raw.items():
+            if isinstance(run_id, str) and isinstance(attempt, int) and not isinstance(attempt, bool):
+                notified[run_id] = attempt
+    return {"seeded": data.get("seeded") is True, "notified": notified}
+
+
+def write_ci_watch_state(
+    owner: str, repo: str, notified: dict[str, int], root: Path | None = None
+) -> None:
+    """Persist the reported run attempts for a repo and mark it seeded.
+
+    Keeps only the newest :data:`CI_WATCH_MAX_RUNS` entries (insertion order).
+    """
+    items = list(notified.items())[-CI_WATCH_MAX_RUNS:]
+    atomic_write(
+        ci_watch_state_path(owner, repo, root),
+        json.dumps(
+            {"owner": owner, "repo": repo, "seeded": True, "notified": dict(items)},
             indent=2,
         ),
     )

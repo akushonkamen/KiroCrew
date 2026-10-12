@@ -5,6 +5,7 @@
  * ChatInput with isRunning. Every frame asserts before writing: the project
  * chip is enabled and opens the picker on click, its accessible name carries
  * the next-response line, and the agent and model chips are still disabled.
+ * A second frame per theme is taken after a mid-turn pick.
  * The chip is hovered for the shot so its enabled hover state is visible.
  *
  * Usage:
@@ -35,19 +36,33 @@ for (const theme of ['dark', 'light']) {
   const agent = page.getByRole('button', { name: /switch agents/ })
   const model = page.getByRole('button', { name: /switch model/ })
   await project.waitFor()
-  await project.click()
-  const label = (await project.getAttribute('aria-label')) || ''
-  const ok =
+  const before = (await project.getAttribute('aria-label')) || ''
+  const okBefore =
     (await project.isEnabled()) &&
-    label.includes('Changes apply from the next response.') &&
+    before.includes('Project: /home/user/work/KiroCrew') && // brand-ok: KiroCrew is the fixture folder name
+    before.includes('Your next message runs in the project you pick. This reply finishes in KiroCrew.\nLinks in this reply will open in the project you pick.') && // brand-ok: fixture folder name
     (await agent.isDisabled()) &&
-    (await model.isDisabled()) &&
-    (await page.locator('[data-capture-label]').innerText()).includes('Picker opened: 1')
-  console.log(`${theme}: ${ok ? 'OK' : 'MISMATCH'} label=${JSON.stringify(label)}`)
-  if (!ok) failed = true
+    (await model.isDisabled())
+  console.log(`${theme} before: ${okBefore ? 'OK' : 'MISMATCH'} label=${JSON.stringify(before)}`)
+  if (!okBefore) failed = true
   else {
     await project.hover()
     await page.locator('[data-capture-root]').screenshot({ path: `${OUT}/project-chip-mid-turn-${theme}.png` })
+  }
+  // The click stands in for choosing OtherRepo in the picker mid-reply.
+  await project.click()
+  await page.locator('[data-capture-label]', { hasText: 'Picker opened: 1' }).waitFor()
+  const after = (await project.getAttribute('aria-label')) || ''
+  const okAfter =
+    (await project.isEnabled()) &&
+    after.includes('Project: /home/user/work/OtherRepo') &&
+    after.includes('This reply finishes in KiroCrew.') && // brand-ok: fixture folder name
+    (await page.locator('[data-capture-label]').innerText()).includes(after.split('\n')[0])
+  console.log(`${theme} after pick: ${okAfter ? 'OK' : 'MISMATCH'} label=${JSON.stringify(after)}`)
+  if (!okAfter) failed = true
+  else {
+    await project.hover()
+    await page.locator('[data-capture-root]').screenshot({ path: `${OUT}/project-chip-mid-turn-after-pick-${theme}.png` })
   }
   await page.close()
 }

@@ -6,6 +6,9 @@
  * The agent and model chips are mounted beside it to show they stay locked.
  * Headless Chromium cannot paint a native `title`, so the chip's accessible
  * name (which mirrors the title) is printed under the composer.
+ * Clicking the chip stands in for picking OtherRepo in the picker, so the
+ * second frame shows the state after a mid-turn pick: the chip names the new
+ * project while the running reply still finishes in the one it started in.
  *
  *   ?theme=dark|light
  */
@@ -33,10 +36,11 @@ function Scene() {
   const [value, setValue] = useState('')
   const [label, setLabel] = useState('')
   const [clicks, setClicks] = useState(0)
+  const [project, setProject] = useState('/home/user/work/KiroCrew')
   useEffect(() => {
     const chip = document.querySelector('[data-capture-root] button[aria-label^="Project: "]')
     setLabel(chip?.getAttribute('aria-label') || '(chip not found)')
-  }, [])
+  }, [project])
   return (
     <div data-capture-root className="bg-bg text-text" style={{ maxWidth: 760, margin: '0 auto', padding: '20px 24px 28px' }}>
       <ChatInput
@@ -47,16 +51,19 @@ function Scene() {
         approvalMode="normal"
         isRunning
         onStop={() => {}}
-        project="/home/user/work/KiroCrew"
+        project={project}
         projectBranch="main"
-        onProjectClick={() => setClicks(c => c + 1)}
+        onProjectClick={() => {
+          setClicks(c => c + 1)
+          setProject('/home/user/work/OtherRepo')
+        }}
         agentName="kirocrew"
         onAgentClick={() => {}}
         modelName="claude-sonnet-4"
         onModelClick={() => {}}
       />
       <pre data-capture-label style={{ marginTop: 14, fontSize: 12, opacity: 0.75, whiteSpace: 'pre-wrap' }}>
-        {`Project chip tooltip / accessible name while a response runs:\n${label}\nPicker opened: ${clicks}`}
+        {`${clicks ? 'After picking OtherRepo mid-reply' : 'Before a pick'}, the project chip tooltip / accessible name while a response runs:\n${label}\nPicker opened: ${clicks}`}
       </pre>
     </div>
   )

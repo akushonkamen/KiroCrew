@@ -4757,14 +4757,18 @@ def _resolve_prompt_mention(
     return expanded, "ok", f"📜 Loaded prompt **@{match['fullName']}** ({len(content):,} chars)"
 
 
-def _slot_prompt_project(slot: _ChatSlot) -> Path | None:
+def _slot_prompt_project(slot: _ChatSlot, project: str | None = None) -> Path | None:
     """The project *slot*'s ``local`` prompts resolve against, or ``None``.
 
     Read on the loop by both entry points below and passed into the resolver, so
     the on-loop and off-loop expansions can never drift on where "local" is for a
     given chat — the property the HTTP prompt surface is documented to match.
+    An explicit *project* (a running turn's start-of-turn snapshot, ``""`` for
+    none) wins over the live ``slot.project``, which a pick made mid-reply may
+    already have moved.
     """
-    return Path(slot.project) if slot.project else None
+    root = slot.project if project is None else project
+    return Path(root) if root else None
 
 
 def _surface_prompt_chip(state: DashboardState, slot: _ChatSlot, chip: str) -> None:
@@ -4818,6 +4822,8 @@ async def _expand_prompt_mention_off_loop(
     message: str,
     state: DashboardState,
     slot: _ChatSlot,
+    *,
+    project: str | None = None,
 ) -> tuple[str, str]:
     """:func:`_expand_prompt_mention` with the filesystem half on a worker thread.
 
@@ -4831,7 +4837,7 @@ async def _expand_prompt_mention_off_loop(
     appends next.
     """
     expanded, status, chip = await asyncio.to_thread(
-        _resolve_prompt_mention, message, _slot_prompt_project(slot)
+        _resolve_prompt_mention, message, _slot_prompt_project(slot, project)
     )
     _surface_prompt_chip(state, slot, chip)
     return expanded, status
@@ -4842,6 +4848,7 @@ def _expand_dollar_skills(
     state: DashboardState,
     slot: _ChatSlot,
     session_key: str,
+    project: str,
 ) -> tuple[str, int]:
     """Expand ``$skillname`` tokens anywhere in *message* into appended skill bodies.
 
@@ -4859,15 +4866,18 @@ def _expand_dollar_skills(
 
     Returns ``(expanded_message, count)`` where *count* is the number of skills
     appended (0 if none resolved).
+
+    *project* is the project to resolve against (``""`` for none): the running
+    turn's start-of-turn snapshot, so a pick made mid-reply cannot load another
+    project's skills into this reply.
     """
     if "$" not in message:
         return message, 0
     skills = _get_skills(state)
+    project_dir = project or None
     try:
-        only = session_skill_globs(
-            session_key, slot.agent or "kirocrew", project_dir=slot.project or None
-        )
-        resolved = skills.resolve_dollar_skills(message, slot.project or None, only=only)
+        only = session_skill_globs(session_key, slot.agent or "kirocrew", project_dir=project_dir)
+        resolved = skills.resolve_dollar_skills(message, project_dir, only=only)
     except Exception:
         logger.exception("dollar-skill resolution failed")
         # Audit the failed resolution attempt — the security-controls guideline
@@ -8655,11 +8665,6 @@ async def _run_chat(
         crew_log_actor=_crew_log_actor,
         provenance_restored=_turn_provenance_restored,
     )
-    # A set_project directive can update the slot while this turn is still
-    # streaming. Heartbeats describe coding done during this turn, so bind
-    # their project to the same start-of-turn state as the actor above.
-    _wt_turn_project = slot.project or None
-
     # Append-only the session's log identity, declared HERE rather than only where
     # it is filled in below: the mid-turn steer cut flushes a segment from a
     # nested closure, and a closure reading one of these before the turn path
@@ -10262,10 +10267,21 @@ async def _run_chat(
         selected_binding = _current_binding()
         registered_slot = state._slots.get(slot.key)
 
-        def _require_current_binding() -> None:
+        def _require_current_binding(*, project_may_be_staged: bool = False) -> None:
+            # ``project_may_be_staged``: once the session is registered the
+            # project route may stage a pick for the NEXT turn (it writes
+            # slot.project and arms the deferred reset). Checks made after that
+            # point compare every other binding field and leave the project
+            # out, because this turn runs on its start-of-turn project and the
+            # staged pick is not a change to it.
+            current = _current_binding()
+            expected = selected_binding
+            if project_may_be_staged:
+                current = current[:1] + current[2:]
+                expected = expected[:1] + expected[2:]
             if (
                 registered_slot is slot and state._slots.get(slot.key) is not slot
-            ) or _current_binding() != selected_binding:
+            ) or current != expected:
                 raise _MemoryUnavailable(
                     "memory_unavailable: conversation binding changed during preparation; "
                     "retry the turn"
@@ -10696,6 +10712,13 @@ async def _run_chat(
         # Registered: the switch handlers' busy scan sees this session from
         # here on, so the lock has done its job and the turn must not hold it.
         _release_dispatch_lock()
+        # The project this turn prepared on and allocated its process in. Once
+        # the lock is released the project route may write slot.project (a
+        # pick made while this reply runs applies from the next turn), so the
+        # rest of the turn reads this snapshot, not the live field: the prompt
+        # context, the activity record and the crew log must describe the same
+        # directory kiro-cli is running in.
+        _turn_project = selected_binding[1] or ""
         # The pre-claim reset is declined for a session another turn holds, and
         # this claim may have waited for exactly that turn. So the decision is made
         # again on the session this turn now holds, under its lease, before any of
@@ -10861,7 +10884,7 @@ async def _run_chat(
                 slot.agent,
                 session_key,
                 slot.memory_mode or "",
-                project=slot.project or "",
+                project=_turn_project,
                 via="chat",
                 dedupe_session=True,
             )
@@ -10977,7 +11000,7 @@ async def _run_chat(
             # turn, so the turn's freshly resolved request is not evidence about
             # that allocation. Unknown allocation provenance stays absent.
             model_requested=slot._session_requested_model or "",
-            cwd=slot.project or "",
+            cwd=_turn_project,
             resumed=bool(resumed),
             parent_slot=_creator_key,
             parent_sid=_creator_sid,
@@ -11110,7 +11133,9 @@ async def _run_chat(
             # is uncacheable, so it cannot be amortized away. `await` keeps the
             # ordering identical to the inline call: nothing after this line runs
             # until the expansion (and the chip it appends) is complete.
-            message, _status = await _expand_prompt_mention_off_loop(message, state, slot)
+            message, _status = await _expand_prompt_mention_off_loop(
+                message, state, slot, project=_turn_project
+            )
             if _status == "ok":
                 prompt_expanded = True
                 sel().log_tool_invocation(
@@ -11195,7 +11220,7 @@ async def _run_chat(
             # rather than introducing it, so the fix is to move the whole call
             # off the loop instead of narrowing what it may discover.
             expanded_message, _n_skills = await asyncio.to_thread(
-                _expand_dollar_skills, message, state, slot, session_key
+                _expand_dollar_skills, message, state, slot, session_key, _turn_project
             )
             message, skill_context = _detach_appended_context(message, expanded_message)
             _request_prefix_context += skill_context
@@ -11563,7 +11588,7 @@ async def _run_chat(
                     agent=kiro_agent or slot.agent or None,
                     resumed=_provider_has_history,
                     workspace=slot.workspace or None,
-                    project=slot.project or None,
+                    project=_turn_project or None,
                     memory_store=memory_store,
                     compressed_history=compressed,
                     mode=slot.mode,
@@ -15471,9 +15496,9 @@ async def _run_chat(
                     # stop the turn here, before the switch is recorded, so the
                     # slot keeps its agent and the reset re-projects the next turn.
                     await refuse_stale_switch(client, new_agent)
-                    _require_current_binding()
+                    _require_current_binding(project_may_be_staged=True)
                     switch_cfg = await asyncio.to_thread(KiroCrewConfig.load)
-                    _require_current_binding()
+                    _require_current_binding(project_may_be_staged=True)
                     switch_writer = asyncio.create_task(
                         asyncio.to_thread(
                             record_provider_agent_switch,
@@ -15481,7 +15506,10 @@ async def _run_chat(
                             session_key,
                             slot.agent or None,
                             new_agent,
-                            slot.project or None,
+                            # The project this turn runs in, not a pick staged
+                            # for the next turn: the switch is resolved and
+                            # recorded where kiro-cli actually switched.
+                            _turn_project or None,
                         )
                     )
                     switch_change = None
@@ -15499,7 +15527,7 @@ async def _run_chat(
                                 switch_cancelled = exc
                         if switch_cancelled is not None:
                             raise switch_cancelled
-                        _require_current_binding()
+                        _require_current_binding(project_may_be_staged=True)
                     except (Exception, asyncio.CancelledError):
                         await drained_to_thread(restore_agent_selection, session_key, switch_change)
                         raise
@@ -15511,7 +15539,10 @@ async def _run_chat(
                         _spec_hooks_unreadable,
                         _spec_hooks_cwd,
                     ) = await _prepare_spec_hooks(state, slot, client, new_agent, is_new=False)
-                    selected_binding = _current_binding()
+                    # Re-baseline on the new agent, keeping the turn's own
+                    # project: a staged pick must not become this turn's.
+                    _rebased = _current_binding()
+                    selected_binding = _rebased[:1] + selected_binding[1:2] + _rebased[2:]
                     assistant_text = ""
                     _wsred.reset()
                     _produced_visible_output = True
@@ -15728,8 +15759,12 @@ async def _run_chat(
                         if _wt_out is not None:
                             _wt_cfg, _wt_line_changes = _wt_out
                             _wt_usage = event.usage
+                            # The turn's own project snapshot: a set_project
+                            # directive or a chip pick can move slot.project
+                            # while this turn streams, and the heartbeat
+                            # describes coding done in this turn.
                             note_coding_activity(
-                                _wt_turn_project,
+                                _turn_project or None,
                                 ai_input_tokens=getattr(_wt_usage, "input_tokens", 0) or 0,
                                 ai_output_tokens=getattr(_wt_usage, "output_tokens", 0) or 0,
                                 ai_line_changes=_wt_line_changes,

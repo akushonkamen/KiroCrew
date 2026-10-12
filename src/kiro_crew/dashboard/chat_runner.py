@@ -12358,6 +12358,22 @@ async def _run_chat(
                     _crew_log_step = crew_log_emit.on_step_started(_crew_log_sid, _crew_log_turn_no)
                     _crew_log_step_t0 = time.monotonic()
                 in_tool_group = False
+                if _terminal_directive_applied:
+                    # Turn-end contract: the applied terminal directive is the
+                    # turn's LAST act, so text after it is never the turn's
+                    # output. It is not accumulated, streamed or persisted: a
+                    # quiet end renders no assistant bubble, whatever the model
+                    # goes on to say. The only record is the count reported at
+                    # turn end. The common source is not the model's own words
+                    # at all: a quiet end leaves the backend's history on a
+                    # tool result, the backend's alternation repair fabricates a
+                    # self-describing assistant placeholder to fill that gap on
+                    # the next request, and the model reads it back as its own
+                    # prior reply and repeats it after each later quiet end.
+                    # Dropping on the structured signal, not the placeholder's
+                    # wording, covers that and every other late text alike.
+                    _activity_after_terminal += 1
+                    continue
                 # The streamed delta is NOT written to the ledger. Redacting each
                 # delta on its own cannot see a credential split across two of
                 # them, and token-by-token streaming makes that split the common
@@ -12386,8 +12402,6 @@ async def _run_chat(
                 # test_subagent_delivery_ttl_anchor), so a diagnostic flag goes
                 # above it rather than between the two.
                 _saw_text_chunk = True
-                if _terminal_directive_applied:
-                    _activity_after_terminal += 1
                 _turn_emitted = True  # tokens delivered — transient retry now unsafe
                 await _report_consumed(irreversible=True)
                 # Stream to the wire through the rolling buffer so a credential
@@ -16463,8 +16477,10 @@ async def _run_chat(
             # turn. Text or a tool call after it is the model's violation, not
             # the runner's — the turn still ends cleanly and recovery stays
             # off (re-arming it would turn a quiet end into a notice card),
-            # so this is reported once and nowhere else. Counts only, by
-            # contract: no text, no tool names.
+            # so this is reported once and nowhere else. Late text was dropped
+            # at arrival (see the text-chunk branch), so this count is the
+            # only trace it leaves. Counts only, by contract: no text, no tool
+            # names.
             logger.warning(
                 "Turn-end contract violation for slot %s: %d model event(s) "
                 "(text chunks or tool calls) after the terminal directive %r applied.",

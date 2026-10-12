@@ -650,3 +650,62 @@ class TestDashboardRunnerHonoursTheSignal:
         )
         # Counts only: no model text and no tool name leaks into the log line.
         assert "one more thing" not in violation.getMessage()
+
+    @pytest.mark.asyncio
+    async def test_text_after_the_quiet_end_is_dropped_not_rendered(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """A quiet end renders no assistant bubble, whatever the model says
+        after it. The field case is the backend's alternation placeholder: a
+        quiet end leaves the backend's history on a tool result, its repair
+        fabricates a self-describing assistant filler for the next request, and
+        the model reads it back as its own prior reply and repeats it after
+        each later quiet end -- a grey "(No assistant response was recorded...)"
+        bubble per patrol cycle. The drop keys on the structured ``ends_turn``
+        signal, not on the placeholder's wording, so any late text is dropped:
+        not streamed as a chunk, not persisted as an assistant row. The one
+        trace is the turn-end WARNING with a count."""
+        state = _stub_state(tmp_path)
+        slot = state.get_or_create_slot("late-placeholder")
+        slot._titled = True
+        placeholder = (
+            "(No assistant response was recorded for the preceding turn. This "
+            "placeholder was inserted automatically to preserve message "
+            "alternation -- it is not a reply the assistant produced.)"
+        )
+        events = [
+            _core_call("nothing_to_do", "tc-quiet"),
+            _result(
+                session_directive.encode("nothing_to_do", {}, "Quiet end requested."), "tc-quiet"
+            ),
+            # Token-by-token, as the model streams it.
+            AcpEvent(kind=EVENT_TEXT_CHUNK, text=placeholder[:40]),
+            AcpEvent(kind=EVENT_TEXT_CHUNK, text=placeholder[40:]),
+            AcpEvent(kind=EVENT_COMPLETE, stop_reason="end_turn"),
+        ]
+        with caplog.at_level("WARNING", logger="kiro_crew.dashboard.chat_runner"):
+            queue_calls = await _drive_turn(state, slot, events, monkeypatch)
+        assert queue_calls == []
+        assert slot._empty_response_retries == 0
+        # Nothing persisted as the agent's words: no assistant row, no chunk row.
+        roles = [m.get("role") for m in slot.messages]
+        assert "assistant" not in roles and "chunk" not in roles, roles
+        assert not any("No assistant response" in str(m.get("content", "")) for m in slot.messages)
+        # Nothing streamed to the wire either.
+        streamed = [
+            c.args[0]
+            for c in state.broadcast_ws.call_args_list
+            if c.args and c.args[0] == "chat_chunk"
+        ]
+        assert streamed == []
+        # The applied quiet end is still the turn's recorded end.
+        rows = [
+            m
+            for m in slot.messages
+            if m.get("role") == "tool" and (m.get("meta") or {}).get("tool_name") == "nothing_to_do"
+        ]
+        assert rows and rows[-1]["meta"].get("ends_turn") is True
+        violations = [r for r in caplog.records if "Turn-end contract violation" in r.getMessage()]
+        assert len(violations) == 1
+        assert "2 model event(s)" in violations[0].getMessage()
+        assert "No assistant response" not in violations[0].getMessage()

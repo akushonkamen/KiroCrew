@@ -894,6 +894,16 @@ against sweep completeness, and are torn down at `close_all`.
   privacy-safe WARNING (`Turn-end contract violation`, counts and the directive
   kind only); it does not fail the turn and does not re-arm recovery, because
   re-arming would turn the quiet end the model asked for into a notice card.
+  Late TEXT is dropped at arrival: not accumulated, not streamed as a
+  `chat_chunk`, not persisted as an assistant row, so a quiet end renders no
+  assistant bubble whatever the model goes on to say. The field source of such
+  text is not the model's own words: a quiet end leaves the backend's history
+  ending on a tool result, the backend's alternation repair fabricates a
+  self-describing assistant placeholder (`(No assistant response was
+  recorded...)`) to fill that gap on the next request, and the model reads it
+  back as its own prior reply and repeats it after each later quiet end — one
+  grey bubble per patrol cycle. The drop keys on the structured `ends_turn`
+  signal, never on the placeholder's wording.
   **Who may end quietly.** The applier's one gate is who opened the turn: a
   monitor wake (`_directive_self_wake`) or a headless producer (cron, crew, app,
   task runner — `_directive_user_origin` False) may; a turn a person opened

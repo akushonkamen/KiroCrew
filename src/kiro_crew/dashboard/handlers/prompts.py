@@ -2913,8 +2913,8 @@ async def api_skill_pending_approve(request: web.Request) -> web.Response:
 
     def _approve_and_bound() -> str | None:
         # Route on candidate kind: an UPDATE candidate rewrites an existing live
-        # skill (approve_pending_update); a NEW candidate is promoted fresh
-        # (approve_pending_skill). kind is read from the candidate detail
+        # skill (approve_pending_update_checked); a NEW candidate is promoted fresh
+        # (approve_pending_skill_checked). kind is read from the candidate detail
         # (top-level or nested ``meta``), defaulting to the new path.
         kind = None
         try:

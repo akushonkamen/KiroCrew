@@ -503,7 +503,7 @@ class ClaimRefusal:
 # (``auto/<slug>/.versions/v<N>-SKILL.md``) so it is pruned from skill discovery
 # (``_iter_skill_files`` skips dot-dirs) — historical snapshots never trigger and
 # never surface in list_skills / list_auto_skills. Written by
-# ``approve_pending_update`` before each live overwrite.
+# ``approve_pending_update_checked`` before each live overwrite.
 VERSIONS_DIRNAME = ".versions"
 
 # Cap on retained per-skill version snapshots; oldest are pruned past this.
@@ -2839,9 +2839,7 @@ class PendingApprovalRefused(Exception):
     ``redaction_failed``, or ``promotion_failed`` (an OS-level I/O failure —
     a read or write, a refused read of the live skill's metadata included).
     Raised by the ``*_checked`` approve variants so
-    the dashboard can tell the user WHY the click did nothing; the legacy
-    ``approve_pending_skill`` / ``approve_pending_update`` wrappers keep the
-    ``None``-on-failure contract for existing callers.
+    the dashboard can tell the user WHY the click did nothing.
     """
 
     def __init__(self, reason: str, report: dict | None = None) -> None:
@@ -4904,7 +4902,7 @@ class SkillsLoader:
     def _validate_and_redact_candidate(self, src: Path, name: str) -> dict[Path, bytes]:
         """Re-validate + redact a candidate's SKILL.md and scripts IN PLACE.
 
-        Shared by ``approve_pending_skill`` and ``approve_pending_update`` so
+        Shared by ``approve_pending_skill_checked`` and ``approve_pending_update_checked`` so
         both enforce the identical discipline: validate every script (covers
         crystallize direct-writes), snapshot each target's ORIGINAL bytes, redact
         in place, then re-validate scripts (redacting a credential-shaped token
@@ -5061,7 +5059,7 @@ class SkillsLoader:
 
         Produces ``{live_body, proposed_body, diff, from_version, to_version,
         base_version, stale_base}`` where ``proposed_body`` is the EXACT content
-        ``approve_pending_update`` would write (same frontmatter rewrite), so the
+        ``approve_pending_update_checked`` would write (same frontmatter rewrite), so the
         reviewer's diff is what approval actually does — not raw candidate text
         whose ``name`` / ``created_at`` / ``version`` lines are rewritten anyway.
 
@@ -5141,18 +5139,6 @@ class SkillsLoader:
         """Return the version number to snapshot the CURRENT live body under."""
         return _versions._resolve_snapshot_version(self, versions_dir, fm_version)
 
-    def approve_pending_update(self, slug: str) -> str | None:
-        """``approve_pending_update_checked`` with the legacy ``None`` contract.
-
-        Existing callers branch on ``None`` for "refused for any reason"; the
-        checked variant raises ``PendingApprovalRefused`` so the dashboard can
-        report WHY. This wrapper keeps their behaviour unchanged.
-        """
-        try:
-            return self.approve_pending_update_checked(slug)
-        except PendingApprovalRefused:
-            return None
-
     def approve_pending_update_checked(self, slug: str) -> str:
         """Promote a pending UPDATE candidate over its live target auto-skill.
 
@@ -5195,7 +5181,7 @@ class SkillsLoader:
             )
             raise PendingApprovalRefused("target_missing")
         target_name = f"{AUTO_SKILL_NAMESPACE}/{target_slug}"
-        # The LIVE side is a write target here (unlike approve_pending_skill, which
+        # The LIVE side is a write target here (unlike approve_pending_skill_checked, which
         # moves into a fresh dest), so it needs its own symlink guard: a symlinked
         # ``scripts/`` (or any symlinked entry) would let ``mkdir``/``copy2`` follow
         # the link and write candidate content OUTSIDE the skill directory.
@@ -5423,7 +5409,7 @@ class SkillsLoader:
         self._prune_versions(versions_dir)
         # (i) Remove the pending candidate.
         # Captured BEFORE the removal so a same-slug replacement staged after
-        # this instant keeps its notification (see approve_pending_skill).
+        # this instant keeps its notification (see approve_pending_skill_checked).
         consumed_at = datetime.now(tz=timezone.utc).isoformat()
         shutil.rmtree(src, ignore_errors=True)
         # (j) Audit the approved update.
@@ -5460,18 +5446,6 @@ class SkillsLoader:
                 }
             )
         return target_name
-
-    def approve_pending_skill(self, slug: str) -> str | None:
-        """``approve_pending_skill_checked`` with the legacy ``None`` contract.
-
-        Existing callers branch on ``None`` for "refused for any reason"; the
-        checked variant raises ``PendingApprovalRefused`` so the dashboard can
-        report WHY. This wrapper keeps their behaviour unchanged.
-        """
-        try:
-            return self.approve_pending_skill_checked(slug)
-        except PendingApprovalRefused:
-            return None
 
     def approve_pending_skill_checked(self, slug: str) -> str:
         """Promote a pending candidate to a live auto-skill.

@@ -3060,7 +3060,7 @@ class HistoryConsolidator:
         # turn below can take up to 90s, and an approval landing in that window
         # advances live — sampling the version afterwards would record the NEW
         # version against a body merged from the OLD one, and
-        # ``approve_pending_update``'s staleness guard would then see base ==
+        # ``approve_pending_update_checked``'s staleness guard would then see base ==
         # current and let the stale body overwrite the intervening update. Reading
         # it first fails safe in the other direction: if live advances after this
         # point the recorded base is behind, the guard fires, and the candidate is
@@ -3078,7 +3078,7 @@ class HistoryConsolidator:
             # candidates in the judge's ``existing`` set (so repeated sessions
             # don't queue duplicates), which means the judge can answer
             # ``UPDATE auto/<pending-slug>`` — a target that is not live.
-            # ``approve_pending_update`` requires a live target, so staging that
+            # ``approve_pending_update_checked`` requires a live target, so staging that
             # would queue a candidate the user can never approve. Drop it
             # instead, audited so the loss is visible.
             self._logger.info(

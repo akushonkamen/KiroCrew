@@ -133,7 +133,7 @@ _LOADER_MEMBERS = {
         _scoped_entries _served_key_by_realpath _snapshot_admitted_roots
         _trusted_project_key _usage_fields _user_first _validate_and_redact_candidate
         _versions_root _vet_unconfined_path
-        approve_pending_skill approve_pending_skill_checked approve_pending_update
+        approve_pending_skill_checked
         approve_pending_update_checked archive_auto_skill catalog_project_skills
         catalog_status close confined_triggered create_auto_skill create_skill credit_skill_reads
         delete_skill dismiss_all_pending dismiss_pending_skill dismiss_pending_slugs
@@ -242,9 +242,7 @@ _LOADER_SIGNATURES = {
     "_vet_unconfined_path": "(self, path: 'Path') -> 'bool'",
     "_versions_root": "(self, target_slug: 'str') -> 'Path'",
     "_write_skill_md": "(skill_file: 'Path', content: 'str', *, dir_fd: 'int | None') -> 'bool'",
-    "approve_pending_skill": "(self, slug: 'str') -> 'str | None'",
     "approve_pending_skill_checked": "(self, slug: 'str') -> 'str'",
-    "approve_pending_update": "(self, slug: 'str') -> 'str | None'",
     "approve_pending_update_checked": "(self, slug: 'str') -> 'str'",
     "archive_auto_skill": "(self, name: 'str') -> 'bool'",
     "catalog_project_skills": "(self, project_dir: 'str | Path') -> 'list[dict]'",

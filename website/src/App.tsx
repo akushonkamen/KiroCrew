@@ -1475,7 +1475,24 @@ export default function App() {
       active={navRowActive(n.path)}
       collapsed={effectiveCollapsed}
       onClick={closeMobileNav}
-      onClickOverride={isChat && (activePath === n.path || activePath.startsWith(n.path + '/')) ? () => window.dispatchEvent(new Event('toggle-pin-chat-sidebar')) : undefined}
+      // The chat row, while chat is the page on screen, toggles the sessions
+      // sidebar instead of navigating. Whether chat is STILL where the app is
+      // going is read from the address bar at click time, not from the rendered
+      // route: react-router wraps every location update in startTransition, so
+      // after a click on another row history has already moved while this rail
+      // keeps rendering chat until that render commits -- hundreds of ms on a
+      // loaded machine. A click on the chat row inside that window means "come
+      // back", and reading the rendered route there turned it into a pin toggle
+      // that navigated nowhere. `appPathname()` strips the build's base so the
+      // test matches the router's own base-less pathname. No leave ask on that
+      // path: the page on screen is the one being returned to, and it was asked
+      // when it was left.
+      onClickOverride={isChat && (activePath === n.path || activePath.startsWith(n.path + '/'))
+        ? () => {
+          if (isChatRoute(appPathname())) window.dispatchEvent(new Event('toggle-pin-chat-sidebar'))
+          else navigate(n.path)
+        }
+        : undefined}
       badge={<NavBadge navId={n.id} collapsed={effectiveCollapsed} appBadges={isAppNavId(n.id) ? railAppBadges : appBadges} runState={n.appName ? railAppRunStates[n.appName] : undefined} />}
     />
   )

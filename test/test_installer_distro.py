@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 from installer_test_helpers import run_bounded
 
+from kiro_crew.testing.wait import wait_until
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI_SH = REPO_ROOT / "cli.sh"
 INSTALL_SH = REPO_ROOT / "install.sh"
@@ -1041,7 +1043,21 @@ def test_run_step_interrupt_terminates_the_child_and_fails_the_step(
         start_new_session=True,
     )
     try:
-        time.sleep(1.0)  # let the step start; the child is 30 s of sleep
+        # Wait for the step to start on a signal, not a clock: the child
+        # writes grandchild.pid only after the helpers were sourced,
+        # _run_step installed its INT/TERM/HUP traps (taken before the
+        # fork) and forked the child that forked the sleeper. A readable
+        # pid is therefore the earliest point at which SIGINT is
+        # guaranteed to land inside the step, the same rule as the save
+        # handshake in #11115; a fixed sleep loses that race on a loaded
+        # runner (#19354), while a slow start here fails by name instead.
+        wait_until(
+            lambda: int(grandchild_pid.read_text().strip()),
+            timeout=10,
+            interval=0.05,
+            describe=lambda: f"grandchild.pid={grandchild_pid.read_text()!r}",
+            ignoring=(OSError, ValueError),
+        )
         proc.send_signal(signal.SIGINT)
         try:
             out, _ = proc.communicate(timeout=10)

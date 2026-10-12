@@ -2598,6 +2598,9 @@
             "submit_edit": "Salvar alterações",
             "title_create": "Novo crew",
             "title_edit": "Editar crew",
+            "triage_model_hint": "Um modelo mais barato para os turnos que só verificam a fila. O trabalho ativo usa Modelo.",
+            "triage_model_label": "Modelo de triagem",
+            "triage_model_off": "Desligado",
             "unattended_hint": "Confiança por slot, restabelecida a cada ciclo. Desligado significa que ele escalona em vez de ficar parado em um pedido de aprovação.",
             "unattended_label": "Executar sem supervisão",
             "worktree_hint": "Uma worktree por issue, ~1,3 GB cada.",
@@ -2675,6 +2678,7 @@
             "slots_free_other": "{{count}} slots livres",
             "state_idle": "inativo",
             "state_paused": "em pausa",
+            "triage_model_unavailable": "O modelo de triagem {{model}} não está disponível para esta conta, então todo turno usa o modelo de trabalho.",
             "work_log": "Registro de trabalho",
             "work_log_hint": "últimas 24h destacadas"
           },

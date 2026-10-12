@@ -637,6 +637,29 @@ class TestCrewReadUpdateRetire(_CrewRouteCase):
         self.assertEqual(updated["avatar_seed"], "Andromeda")
         self.assertNotIn("not_a_field", updated)
 
+    async def test_the_triage_model_is_stored_and_a_bad_id_is_dropped(self):
+        crew = self.crew("Andromeda")
+        self.assertEqual(crew["triage_model"], "")
+        body = {"owner": OWNER, "repo": REPO, "id": crew["id"]}
+        res = await self.call("PUT", "/crew", body={**body, "triage_model": "claude-haiku-4.5"})
+        self.assertEqual(_payload(res)["crew"]["triage_model"], "claude-haiku-4.5")
+        res = await self.call("PUT", "/crew", body={**body, "triage_model": "not a model"})
+        self.assertEqual(_payload(res)["crew"]["triage_model"], "claude-haiku-4.5")
+        res = await self.call("PUT", "/crew", body={**body, "triage_model": ""})
+        self.assertEqual(_payload(res)["crew"]["triage_model"], "")
+
+    async def test_the_crew_page_names_a_triage_model_the_session_withheld(self):
+        from kiro_crew.apps.builtins.issue_radar.backend import crew_model
+
+        crew = self.crew("Andromeda", triage_model="claude-haiku-4.5")
+        query = {"owner": OWNER, "repo": REPO, "id": crew["id"]}
+        page = _payload(await self.call("GET", "/crew", query=query))
+        self.assertEqual(page["triage_model_unavailable"], "")
+        crew_model._withheld[crew["id"]] = "claude-haiku-4.5"
+        self.addCleanup(crew_model._withheld.clear)
+        page = _payload(await self.call("GET", "/crew", query=query))
+        self.assertEqual(page["triage_model_unavailable"], "claude-haiku-4.5")
+
     async def test_a_rename_onto_a_taken_name_is_409(self):
         first = self.crew("Andromeda")
         self.crew("Whirlpool")

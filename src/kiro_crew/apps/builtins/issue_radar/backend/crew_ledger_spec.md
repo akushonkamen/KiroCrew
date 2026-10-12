@@ -323,6 +323,7 @@ pre-projection state.
 | `avatar_variant` | int \| null | 0–7 pins one ghost outfit; null = derive from `avatar_seed` |
 | `agent` | str | `kirocrew` by default |
 | `model` | str | `""` = governed default |
+| `triage_model` | str | `""` = off: every turn runs on `model`. Set, a turn with no open item in an acting phase (`selected`, `claimed`, `investigating`, `implementing`, `addressing-review`) runs on this model, and any acting item puts the crew back on `model`. Switched between turns, never inside one. A model the account cannot run falls back to `model` and is named on the crew page as `triage_model_unavailable` |
 | `extra_prompt` | str | appended after the brief, never replacing it |
 | `labels` | [str] | its scope. Empty = every label |
 | `auto_resolve_conflicts` | bool | default true, structural files only |

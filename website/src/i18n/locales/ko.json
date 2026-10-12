@@ -2582,6 +2582,9 @@
             "submit_edit": "변경 사항 저장",
             "title_create": "새 크루",
             "title_edit": "크루 편집",
+            "triage_model_hint": "대기열만 확인하는 턴에 쓰는 더 저렴한 모델입니다. 진행 중인 작업은 ‘모델’에서 실행됩니다.",
+            "triage_model_label": "분류 모델",
+            "triage_model_off": "끄기",
             "unattended_hint": "슬롯별 신뢰 설정으로, 매 사이클마다 다시 부여됩니다. 끄면 승인 창에서 멈춰 있지 않고 에스컬레이션합니다.",
             "unattended_label": "무인 실행",
             "worktree_hint": "이슈마다 워크트리 하나씩, 각각 약 1.3 GB입니다.",
@@ -2657,6 +2660,7 @@
             "slots_free_other": "남은 슬롯 {{count}}개",
             "state_idle": "유휴",
             "state_paused": "일시 중지",
+            "triage_model_unavailable": "분류 모델 {{model}}을(를) 이 계정에서 사용할 수 없어 모든 턴을 작업 모델에서 실행합니다.",
             "work_log": "작업 기록",
             "work_log_hint": "최근 24시간 강조"
           },

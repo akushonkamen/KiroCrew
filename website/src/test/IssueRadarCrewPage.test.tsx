@@ -216,6 +216,24 @@ describe('CrewPageView — phases and event kinds are translated, not machine to
   })
 })
 
+describe('CrewPageView — triage model', () => {
+  it('says so when the account cannot run the triage model', async () => {
+    api.crew.mockResolvedValue(payload({ triage_model_unavailable: 'gpt-5.6-sol' }))
+    renderPage()
+
+    const notice = await screen.findByTestId('crew-triage-model-unavailable')
+    expect(notice).toHaveTextContent(copy('triage_model_unavailable', { model: 'gpt-5.6-sol' }))
+    expect(notice).toHaveAttribute('role', 'status')
+  })
+
+  it('shows nothing when the triage model runs, or the gateway does not report it', async () => {
+    api.crew.mockResolvedValue(payload({ triage_model_unavailable: '' }))
+    renderPage()
+    await screen.findByTestId('crew-page')
+    expect(screen.queryByTestId('crew-triage-model-unavailable')).toBeNull()
+  })
+})
+
 describe('CrewPageView — slot accounting', () => {
   it('shows the at-limit note only once open work items reach max_open', async () => {
     api.crew.mockResolvedValue(payload({ counts: { open: 3 } }))

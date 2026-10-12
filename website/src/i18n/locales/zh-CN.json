@@ -2494,6 +2494,9 @@
             "submit_edit": "保存更改",
             "title_create": "新建小队",
             "title_edit": "编辑小队",
+            "triage_model_hint": "只检查队列的轮次使用的更便宜模型。进行中的工作使用“模型”。",
+            "triage_model_label": "分诊模型",
+            "triage_model_off": "关闭",
             "unattended_hint": "按名额授予信任，每个周期重新确认。关闭时，它会直接上报，而不是卡在批准提示上。",
             "unattended_label": "无人值守运行",
             "worktree_hint": "每个 issue 一个 worktree，各约 1.3 GB。",
@@ -2569,6 +2572,7 @@
             "slots_free_other": "还有 {{count}} 个名额空闲",
             "state_idle": "空闲",
             "state_paused": "已暂停",
+            "triage_model_unavailable": "此账户无法使用分诊模型 {{model}}，因此每一轮都使用工作模型。",
             "work_log": "工作日志",
             "work_log_hint": "高亮显示最近 24h"
           },

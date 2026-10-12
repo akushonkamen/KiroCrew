@@ -251,6 +251,7 @@ describe('CrewEditor — create mode', () => {
     // (rather than one key) is caught too.
     pick('crew-editor-agent', 'kirocrew-crew')
     pick('crew-editor-model', 'claude-opus-5')
+    pick('crew-editor-triage-model', 'gpt-5.6-sol')
     fireEvent.change(screen.getByTestId('crew-editor-prompt'), {
       target: { value: 'stay off the release branch' },
     })
@@ -271,6 +272,7 @@ describe('CrewEditor — create mode', () => {
       avatar_variant: null,
       agent: 'kirocrew-crew',
       model: 'claude-opus-5',
+      triage_model: 'gpt-5.6-sol',
       extra_prompt: 'stay off the release branch',
       labels: ['area: dashboard'],
       auto_resolve_conflicts: true,
@@ -488,6 +490,50 @@ describe('CrewEditor — the agent and model pickers', () => {
     expect(
       field('crew-editor-agent').getByRole('option', { name: 'retired-agent' }),
     ).toHaveAttribute('aria-selected', 'true')
+  })
+})
+
+describe('CrewEditor — the triage model picker', () => {
+  it('defaults to Off and offers the served model list', async () => {
+    await openCreate()
+    expect(trigger('crew-editor-triage-model')).toHaveTextContent(i18nT(`${K}.triage_model_off`))
+    expect(optionsOf('crew-editor-triage-model')).toEqual([
+      i18nT(`${K}.triage_model_off`),
+      'claude-opus-5',
+      'gpt-5.6-sol',
+    ])
+  })
+
+  it('sends only the triage model when that is all that changed', async () => {
+    renderEditor(CREW)
+    await screen.findByTestId('crew-editor')
+    pick('crew-editor-triage-model', 'gpt-5.6-sol')
+    fireEvent.click(submitBtn())
+
+    await waitFor(() => expect(mockApi.updateCrew).toHaveBeenCalledTimes(1))
+    expect(mockApi.updateCrew).toHaveBeenCalledWith(ACTIVE, CREW.id, { triage_model: 'gpt-5.6-sol' })
+  })
+
+  it('switches triage off with an empty value', async () => {
+    renderEditor({ ...CREW, triage_model: 'gpt-5.6-sol' })
+    await screen.findByTestId('crew-editor')
+    pick('crew-editor-triage-model', i18nT(`${K}.triage_model_off`))
+    fireEvent.click(submitBtn())
+
+    await waitFor(() => expect(mockApi.updateCrew).toHaveBeenCalledTimes(1))
+    expect(mockApi.updateCrew).toHaveBeenCalledWith(ACTIVE, CREW.id, { triage_model: '' })
+  })
+
+  it('treats a record from a gateway without the field as Off', async () => {
+    // The fixture predates the field. Nothing changed, so nothing is sent: an
+    // absent field is not a pending edit.
+    expect('triage_model' in CREW).toBe(false)
+    renderEditor(CREW)
+    await screen.findByTestId('crew-editor')
+    expect(trigger('crew-editor-triage-model')).toHaveTextContent(i18nT(`${K}.triage_model_off`))
+    fireEvent.click(submitBtn())
+    await waitFor(() => expect(mockApi.updateCrew).toHaveBeenCalledTimes(1))
+    expect(mockApi.updateCrew).toHaveBeenCalledWith(ACTIVE, CREW.id, {})
   })
 })
 

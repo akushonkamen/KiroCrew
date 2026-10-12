@@ -69,6 +69,7 @@ const BACKSTOP_WAKE_SECONDS = 120
 const DEFAULTS = {
   agent: 'kirocrew',
   model: '',
+  triageModel: '',
   extraPrompt: '',
   labels: [] as string[],
   autoResolveConflicts: true,
@@ -98,6 +99,8 @@ interface Draft {
   variant: number | null
   agent: string
   model: string
+  /** `''` = off: every turn runs on `model`. */
+  triageModel: string
   extraPrompt: string
   labels: string[]
   autoResolveConflicts: boolean
@@ -114,6 +117,7 @@ function draftFromCrew(crew: Crew | null | undefined): Draft {
       variant: null,
       agent: DEFAULTS.agent,
       model: DEFAULTS.model,
+      triageModel: DEFAULTS.triageModel,
       extraPrompt: DEFAULTS.extraPrompt,
       labels: DEFAULTS.labels,
       autoResolveConflicts: DEFAULTS.autoResolveConflicts,
@@ -128,6 +132,7 @@ function draftFromCrew(crew: Crew | null | undefined): Draft {
     variant: crew.avatar_variant,
     agent: crew.agent,
     model: crew.model,
+    triageModel: crew.triage_model ?? '',
     extraPrompt: crew.extra_prompt,
     labels: Array.isArray(crew.labels) ? [...crew.labels] : [],
     autoResolveConflicts: crew.auto_resolve_conflicts,
@@ -383,6 +388,16 @@ export default function CrewEditor({ open, onClose, crew }: CrewEditorProps) {
     return served
   }, [availableModels, draft.model])
 
+  /** The same served list for the triage picker, keeping ITS stored value present
+   *  for the same reason; `''` is its clear row, which switches triage off. */
+  const triageModelOptions = useMemo<string[]>(() => {
+    const served = availableModels.map(m => m.name).filter(name => name !== 'auto')
+    if (draft.triageModel && !served.includes(draft.triageModel)) {
+      return [draft.triageModel, ...served]
+    }
+    return served
+  }, [availableModels, draft.triageModel])
+
   const suggestions = useMemo(() => {
     const raw = namesQuery.data?.suggestions
     return (Array.isArray(raw) ? raw : []).filter(s => typeof s === 'string' && s.trim())
@@ -480,6 +495,7 @@ export default function CrewEditor({ open, onClose, crew }: CrewEditorProps) {
         if (draft.variant !== crew.avatar_variant) p.avatar_variant = draft.variant
         if (draft.agent !== crew.agent) p.agent = draft.agent
         if (draft.model !== crew.model) p.model = draft.model
+        if (draft.triageModel !== (crew.triage_model ?? '')) p.triage_model = draft.triageModel
         if (draft.extraPrompt !== crew.extra_prompt) p.extra_prompt = draft.extraPrompt
         if (!sameLabels(draft.labels, Array.isArray(crew.labels) ? crew.labels : [])) {
           p.labels = draft.labels
@@ -498,6 +514,7 @@ export default function CrewEditor({ open, onClose, crew }: CrewEditorProps) {
         avatar_variant: draft.variant,
         agent: draft.agent,
         model: draft.model,
+        triage_model: draft.triageModel,
         extra_prompt: draft.extraPrompt,
         labels: draft.labels,
         auto_resolve_conflicts: draft.autoResolveConflicts,
@@ -794,6 +811,23 @@ export default function CrewEditor({ open, onClose, crew }: CrewEditorProps) {
                 {t('apps.issueRadar.views.crews.editor.model_hint')}
               </p>
             </div>
+          </div>
+          <div className="mt-4 min-w-0" data-testid="crew-editor-triage-model">
+            <span className="mb-1.5 block text-[13px] font-semibold text-text">
+              {t('apps.issueRadar.views.crews.editor.triage_model_label')}
+            </span>
+            <SimpleSelect
+              aria-label={t('apps.issueRadar.views.crews.editor.triage_model_label')}
+              options={triageModelOptions}
+              value={draft.triageModel}
+              // The off row: `''` runs every turn on the work model, so it has to
+              // be a choice the user can return to.
+              clearLabel={t('apps.issueRadar.views.crews.editor.triage_model_off')}
+              onChange={v => patch('triageModel', v)}
+            />
+            <p className="mt-1.5 text-[12px] leading-relaxed text-muted">
+              {t('apps.issueRadar.views.crews.editor.triage_model_hint')}
+            </p>
           </div>
           <div className="mt-4">
             <Field

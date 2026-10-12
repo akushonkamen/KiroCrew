@@ -1082,6 +1082,9 @@ export interface Crew {
   avatar_variant: number | null
   agent: string
   model: string
+  /** The model for turns that only check the queue; `''` = off, every turn on
+   *  `model`. Optional because a gateway that predates it omits the field. */
+  triage_model?: string
   extra_prompt: string
   labels: string[]
   auto_resolve_conflicts: boolean
@@ -1174,6 +1177,7 @@ export interface CrewPatch {
   avatar_variant?: number | null
   agent?: string
   model?: string
+  triage_model?: string
   extra_prompt?: string
   worktree_root?: string
   labels?: string[]
@@ -1250,6 +1254,9 @@ export interface CrewDetailResponse {
    * client-side: the page renders a filtered slice of `items`, so a client tally
    * would follow the filter. */
   counts: { open: number }
+  /** The crew's triage model when the account cannot run it, so every turn is on
+   *  the work model instead; `''` (or absent on an older gateway) otherwise. */
+  triage_model_unavailable?: string
 }
 
 /** `event` is null when the write carried no progress line. */

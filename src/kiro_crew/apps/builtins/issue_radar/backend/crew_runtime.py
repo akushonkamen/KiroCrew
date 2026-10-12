@@ -55,7 +55,7 @@ from kiro_crew.dashboard.chat_runner import _run_chat
 from kiro_crew.dashboard.chat_utils import slot_history_key
 from kiro_crew.safety_override import safety_override
 
-from . import crew_store, github_client, provider, store
+from . import crew_model, crew_store, github_client, provider, store
 
 try:  # the autonudge service is feature-flagged; the runtime degrades without it
     from kiro_crew.autonudge import get_instance as _autonudge_instance
@@ -293,6 +293,7 @@ def build_snapshot(
         "writable_labels": list(writable_labels(settings)),
         "open_count": crew_store.open_slot_count(owner, repo, crew_id, root),
         "max_open": int(crew.get("max_open") or 0),
+        "triage_model": crew_model.triage_model(crew),
         "items": [
             {
                 "number": it.get("number"),
@@ -367,6 +368,17 @@ def compose_nudge(snapshot: dict[str, Any]) -> str:
             lines.append(f"- #{it.get('number')} {it.get('phase')}{pr} — next: {nxt}")
     else:
         lines.append("Open work items: none. Pick up new work if you are under your limit.")
+    triage = str(snapshot.get("triage_model") or "")
+    if triage:
+        # Static per crew, so it is true on every turn whichever model this one is
+        # on: the open items above are what tell the crew which kind of turn it is.
+        acting = ", ".join(sorted(crew_model.ACTING_PHASES))
+        lines.append(
+            f"Triage model `{triage}`: a turn with no item in an acting phase "
+            f"({acting}) runs on it. On such a turn only decide what needs action; "
+            "if something does, record that item's move into an acting phase and "
+            "end the turn. The next turn runs on your work model."
+        )
     lines.append(
         "Read the ledger first, reconcile every open item against the six unblock "
         "signals, advance ONE item, and write the ledger before the turn ends."
@@ -757,6 +769,46 @@ async def ensure_crew_session(state: Any, owner: str, repo: str, crew: dict[str,
     return slot
 
 
+async def _turn_model_items(
+    slot: Any,
+    owner: str,
+    repo: str,
+    crew: dict[str, Any],
+    root: Path | None = None,
+) -> list[dict[str, Any]] | None:
+    """The open work items the next turn's model is chosen from, read off the loop.
+
+    ``None`` when there is nothing to choose: a crew with no triage model, and no
+    triage model to switch off, never reads.
+    """
+    if slot is None:
+        return None
+    if not crew_model.triage_model(crew) and not crew_model.is_managed(slot):
+        return None
+    return await asyncio.to_thread(
+        partial(crew_store.list_work_items, owner, repo, str(crew.get("id")), root, open_only=True)
+    )
+
+
+async def _apply_turn_model(
+    state: Any,
+    slot: Any,
+    owner: str,
+    repo: str,
+    crew: dict[str, Any],
+    root: Path | None = None,
+) -> bool:
+    """Point the crew's slot at the model its next turn runs on (see ``crew_model``).
+
+    The decision and the write are one synchronous step after the read, so a turn
+    that started during the read is seen and left alone.
+    """
+    items = await _turn_model_items(slot, owner, repo, crew, root)
+    if items is None:
+        return False
+    return crew_model.apply_turn_model(state, slot, crew, items)
+
+
 async def launch_crew(
     state: Any,
     owner: str,
@@ -772,6 +824,7 @@ async def launch_crew(
     gate, all of which the watchdog re-reads every cycle.
     """
     slot = await ensure_crew_session(state, owner, repo, crew)
+    await _apply_turn_model(state, slot, owner, repo, crew, root)
     svc = _autonudge_instance() if _autonudge_instance is not None else None
     if svc is None:
         logger.warning(
@@ -970,6 +1023,9 @@ async def _wake_crew_body(
                 await svc.update(loop.id, message=prompt)
             except Exception:  # pragma: no cover - refresh is best-effort
                 logger.debug("issue-radar: nudge refresh failed", exc_info=True)
+    # Read here, BEFORE the dispatch-time re-read below, so that re-read stays the
+    # last await before the turn. The model is chosen from it synchronously there.
+    turn_items = await _turn_model_items(slot, owner, repo, crew, root)
     if getattr(slot, "running", False):
         # DROPPED, not queued — the same call autonudge's own fire path makes, and
         # for a stronger reason here: a queued prompt can carry the whole brief, so
@@ -1011,6 +1067,11 @@ async def _wake_crew_body(
             reason or "signal",
         )
         return False
+    # The model this turn runs on, from the ledger read above and the record just
+    # re-read. Synchronous, and nothing awaits between it and the dispatch, so no
+    # other turn can start on the slot in between.
+    if turn_items is not None:
+        crew_model.apply_turn_model(state, slot, at_dispatch, turn_items)
     tagged = f"[crew wake: {reason}]\n{prompt}" if reason else prompt
     started = dispatch_crew_turn(state, slot, tagged)
     _call_if_present(state, "push_slots_update")
@@ -1374,6 +1435,10 @@ async def watchdog_cycle(
                     slot = await ensure_crew_session(state, owner, repo, crew)
                 if not loop.active:
                     await svc.update(loop.id, active=True)
+        # The model the next idle-timer turn runs on: the loop fires on its own
+        # clock, and this pass is what keeps the slot's model in step with the
+        # ledger between wakes.
+        await _apply_turn_model(state, slot, owner, repo, crew, root)
         # The pass itself awaits — the grant, the launch, the re-arm — so read once
         # more and undo it if the operator stopped the crew while it ran.
         # ``revoke_crew_execution`` is the exact inverse of what this body just

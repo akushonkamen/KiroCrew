@@ -2688,6 +2688,9 @@
             "submit_edit": "Enregistrer les modifications",
             "title_create": "Nouvelle équipe",
             "title_edit": "Modifier l’équipe",
+            "triage_model_hint": "Un modèle moins coûteux pour les tours qui ne font que vérifier la file. Le travail actif utilise Modèle.",
+            "triage_model_label": "Modèle de tri",
+            "triage_model_off": "Désactivé",
             "unattended_hint": "Confiance accordée par emplacement, rétablie à chaque cycle. Si l’option est désactivée, l’équipe escalade au lieu de rester bloquée sur une demande d’approbation.",
             "unattended_label": "Exécuter sans surveillance",
             "worktree_hint": "Un worktree par ticket, environ 1,3 Go chacun.",
@@ -2765,6 +2768,7 @@
             "slots_free_other": "{{count}} emplacements libres",
             "state_idle": "inactive",
             "state_paused": "en pause",
+            "triage_model_unavailable": "Le modèle de tri {{model}} n’est pas disponible pour ce compte : chaque tour utilise donc le modèle de travail.",
             "work_log": "Journal de travail",
             "work_log_hint": "24 h mises en évidence"
           },

@@ -2635,6 +2635,9 @@
             "submit_edit": "Änderungen speichern",
             "title_create": "Neue Crew",
             "title_edit": "Crew bearbeiten",
+            "triage_model_hint": "Ein günstigeres Modell für Runden, die nur die Warteschlange prüfen. Aktive Arbeit läuft auf „Modell“.",
+            "triage_model_label": "Triage-Modell",
+            "triage_model_off": "Aus",
             "unattended_hint": "Vertrauen pro Slot, in jedem Zyklus neu erteilt. Aus heißt: Sie eskaliert, statt in einer Genehmigungsabfrage zu hängen.",
             "unattended_label": "Unbeaufsichtigt ausführen",
             "worktree_hint": "Ein Worktree pro Issue, je ~1,3 GB.",
@@ -2711,6 +2714,7 @@
             "slots_free_other": "{{count}} Slots frei",
             "state_idle": "Leerlauf",
             "state_paused": "pausiert",
+            "triage_model_unavailable": "Das Triage-Modell {{model}} ist für dieses Konto nicht verfügbar, daher läuft jede Runde auf dem Arbeitsmodell.",
             "work_log": "Arbeitsprotokoll",
             "work_log_hint": "24 h hervorgehoben"
           },

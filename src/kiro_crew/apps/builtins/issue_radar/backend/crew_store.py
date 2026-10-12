@@ -60,6 +60,7 @@ from kiro_crew.crew_log.entry_types import (
     RADAR_TTL_ACTIVE_PHASES,
 )
 from kiro_crew.crew_log.store import log_exception_text
+from kiro_crew.validation import MODEL_PICKER_HIDDEN_MODEL_ID_RE
 
 from . import store
 
@@ -175,6 +176,9 @@ _DEFAULT_CREW: dict[str, Any] = {
     "max_open": 3,
     "agent": "kirocrew",
     "model": "",
+    # The model for turns that only check the queue (see ``crew_model``). Empty
+    # means the crew runs every turn on ``model``.
+    "triage_model": "",
     "extra_prompt": "",
     "worktree_root": "",
     "enabled": True,
@@ -255,6 +259,22 @@ def _validated_max_open(value: Any) -> int | None:
     if number is None or not (MIN_MAX_OPEN <= number <= MAX_MAX_OPEN):
         return None
     return number
+
+
+def _validated_model_id(value: Any) -> str | None:
+    """A crew's triage model id, ``""`` for unset, or ``None`` for "not a model id".
+
+    The shape rule is the dashboard's own model-id grammar
+    (``MODEL_PICKER_HIDDEN_MODEL_ID_RE``), so an id the model picker would refuse
+    is refused here too. Whether the account can RUN the id is a question only a
+    live session answers; ``crew_model`` asks it and falls back when it cannot.
+    """
+    if not isinstance(value, str):
+        return None
+    model = value.strip()
+    if not model:
+        return ""
+    return model if MODEL_PICKER_HIDDEN_MODEL_ID_RE.fullmatch(model) else None
 
 
 def _validated_ttl_hours(value: Any) -> int | None:
@@ -541,6 +561,10 @@ def _coerce_crew(rec: dict[str, Any]) -> dict[str, Any]:
     max_open = _validated_max_open(out.get("max_open"))
     out["max_open"] = max_open if max_open is not None else _DEFAULT_CREW["max_open"]
     out["avatar_variant"] = _finite_int(out.get("avatar_variant"))
+    # Same read-side discipline for the triage model: a hand-edited id the write
+    # path would have refused reads as unset, so the crew runs on its work model.
+    triage = _validated_model_id(out.get("triage_model"))
+    out["triage_model"] = triage if triage is not None else ""
     # The avatar seed is stored separately from the name on purpose: renaming a
     # crew must not change its face.
     if not out.get("avatar_seed"):
@@ -707,6 +731,10 @@ def _validated_crew_patch(patch: dict[str, Any]) -> dict[str, Any]:
     for key in ("agent", "model", "extra_prompt", "worktree_root", "paused_reason"):
         if key in patch and isinstance(patch[key], str):
             out[key] = patch[key]
+    if "triage_model" in patch:
+        triage = _validated_model_id(patch["triage_model"])
+        if triage is not None:
+            out["triage_model"] = triage
     for key in ("auto_resolve_conflicts", "auto_merge", "unattended", "enabled"):
         if key in patch and isinstance(patch[key], bool):
             out[key] = patch[key]

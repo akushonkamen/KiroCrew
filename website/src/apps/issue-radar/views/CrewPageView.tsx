@@ -48,6 +48,7 @@ import { CirclePlus, Inbox, ListChecks, Pause, Pencil, Play, ScrollText } from '
 
 import { Badge, Btn, Card, CardTitle, EmptyState, StatCard } from '../../../components/ui'
 import ErrorNotice from '../../../components/ErrorNotice'
+import StatusNotice from '../../../components/StatusNotice'
 import { fmtDate, fmtDateFields, fmtDateTime, fmtNumber, fmtRelative, toDate } from '../../../i18n/format'
 import { useAppDispatch } from '../../../store'
 import { switchSlot } from '../../../store/chatSlice'
@@ -242,6 +243,7 @@ export default function CrewPageView({ crewId, onEdit }: CrewPageViewProps) {
   const items = useMemo(() => detail.data?.items ?? [], [detail.data])
   const events = useMemo(() => detail.data?.events ?? [], [detail.data])
   const counts = detail.data?.counts ?? { open: 0 }
+  const triageUnavailable = detail.data?.triage_model_unavailable ?? ''
 
   const pause = useMutation({
     mutationFn: (paused: boolean) => issueRadarApi.setCrewPaused(active, crewId, paused),
@@ -380,6 +382,15 @@ export default function CrewPageView({ crewId, onEdit }: CrewPageViewProps) {
               {t('apps.issueRadar.views.crews.page.paused_reason', { reason: crew.paused_reason })}
             </div>
           )}
+          {/* Nothing failed: the crew keeps working, on its work model. Shown so a
+              triage model the account cannot run is never a silent no-op. */}
+          <StatusNotice
+            message={triageUnavailable
+              ? t('apps.issueRadar.views.crews.page.triage_model_unavailable', { model: triageUnavailable })
+              : null}
+            className="mt-1.5"
+            testId="crew-triage-model-unavailable"
+          />
           {/* Opening the crew's session acts on a persisted slot; no draft here. */}
           <ErrorNotice
             message={sessionError}

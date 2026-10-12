@@ -2598,6 +2598,9 @@
             "submit_edit": "Guardar cambios",
             "title_create": "Equipo nuevo",
             "title_edit": "Editar equipo",
+            "triage_model_hint": "Un modelo más barato para los turnos que solo revisan la cola. El trabajo activo usa Modelo.",
+            "triage_model_label": "Modelo de triaje",
+            "triage_model_off": "Desactivado",
             "unattended_hint": "Confianza por slot, restablecida en cada ciclo. Desactivado significa que escala en lugar de quedarse esperando en un aviso de aprobación.",
             "unattended_label": "Ejecutar sin supervisión",
             "worktree_hint": "Un worktree por incidencia, ~1,3 GB cada uno.",
@@ -2675,6 +2678,7 @@
             "slots_free_other": "{{count}} slots libres",
             "state_idle": "inactivo",
             "state_paused": "en pausa",
+            "triage_model_unavailable": "El modelo de triaje {{model}} no está disponible para esta cuenta, así que cada turno usa el modelo de trabajo.",
             "work_log": "Registro de trabajo",
             "work_log_hint": "24 h destacadas"
           },

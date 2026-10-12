@@ -268,7 +268,6 @@ class TestConductorInstaller:
             "@kirocrew-core/session_ledger_record",
             "@kirocrew-core/skill_search",
             "@kirocrew-core/skill_fetch",
-            "@kirocrew-core/select_crew",
             "@kirocrew-core/send_message",
             "@kirocrew-core/send_notification",
             "@kirocrew-core/ask_question",
@@ -690,7 +689,6 @@ class TestConductorInstaller:
             "@kirocrew-core/session_ledger_record",
             "@kirocrew-core/skill_search",
             "@kirocrew-core/skill_fetch",
-            "@kirocrew-core/select_crew",
             "@kirocrew-core/send_message",
             "@kirocrew-core/send_notification",
             "@kirocrew-core/ask_question",
@@ -729,7 +727,6 @@ class TestConductorInstaller:
             "kirocrew-core/nothing_to_do",
             "kirocrew-core/reset_conversation",
             "kirocrew-core/resource_status",
-            "kirocrew-core/select_crew",
             "kirocrew-core/send_message",
             "kirocrew-core/send_notification",
             "kirocrew-core/session_ledger_read",
@@ -844,11 +841,11 @@ class TestConductorInstaller:
 
         monkeypatch.setattr(agent, "sel", lambda: _Recorder())
         self._install(
-            tmp_path, monkeypatch, may_auto_approve=lambda ref: ref != "@kirocrew-core/select_crew"
+            tmp_path, monkeypatch, may_auto_approve=lambda ref: ref != "@kirocrew-core/skill_fetch"
         )
         withheld = [c for c in calls if c.get("operation") == "mcp_auto_approve_withheld"]
         assert len(withheld) == 1
-        assert "@kirocrew-core/select_crew" in withheld[0]["resources"]
+        assert "@kirocrew-core/skill_fetch" in withheld[0]["resources"]
         assert withheld[0]["source"] == "_install_conductor_agent"
 
     def test_no_audit_event_when_nothing_is_withheld(self, tmp_path, monkeypatch):
@@ -872,9 +869,9 @@ class TestConductorInstaller:
 
         monkeypatch.setattr(agent, "sel", lambda: _Broken())
         data = self._install(
-            tmp_path, monkeypatch, may_auto_approve=lambda ref: ref != "@kirocrew-core/select_crew"
+            tmp_path, monkeypatch, may_auto_approve=lambda ref: ref != "@kirocrew-core/skill_fetch"
         )
-        assert "@kirocrew-core/select_crew" not in data["allowedTools"]
+        assert "@kirocrew-core/skill_fetch" not in data["allowedTools"]
         assert data["allowedTools"] == [
             "session",
             "report",
@@ -888,7 +885,6 @@ class TestConductorInstaller:
             "@kirocrew-core/session_ledger_read",
             "@kirocrew-core/session_ledger_record",
             "@kirocrew-core/skill_search",
-            "@kirocrew-core/skill_fetch",
             "@kirocrew-core/send_message",
             "@kirocrew-core/send_notification",
             "@kirocrew-core/ask_question",

@@ -26,7 +26,7 @@ const CREWS = [
   { name: 'kirocrew', kiro_agent: 'kirocrew', workspace: 'default', memory_store: 'default' },
   {
     name: 'oncall', kiro_agent: 'kirocrew', workspace: 'oncall',
-    memory_store: 'oncall-mem', triggers: 'incidents',
+    memory_store: 'oncall-mem',
   },
 ]
 
@@ -88,13 +88,13 @@ async function main() {
         shot.push(`${theme}-${name}.png`)
       }
 
-      // Triggers is one of the seven fields dirtyPanes tracks and the one the
+      // Display name is one of the fields dirtyPanes tracks and the kind the
       // earlier schedule-only guard left unprotected.
-      await sheet.locator('[data-testid="crew-rail-routing"]').click()
+      await sheet.locator('[data-testid="crew-rail-avatar"]').click()
       await page.waitForTimeout(250)
-      await sheet.getByRole('textbox', { name: 'Triggers' }).fill('incidents, prod outages')
+      await sheet.getByTestId('display-name-input').fill('On-call desk')
       await page.waitForTimeout(250)
-      await save('dirty-routing-pane')
+      await save('dirty-avatar-pane')
 
       await page.keyboard.press('Escape')
       const confirm$ = page.getByRole('dialog', { name: 'Discard unsaved changes?' })

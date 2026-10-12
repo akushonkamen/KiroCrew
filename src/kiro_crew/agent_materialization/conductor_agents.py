@@ -124,8 +124,9 @@ def _conductor_mcp_servers(config: dict[str, Any]) -> dict[str, Any]:
 # all, which is the direction a safety list wants.
 #
 # The core verbs that replaced the bare ``@kirocrew-core`` on the goal conductor;
-# the pipeline and security conductors shipped them from their first release,
-# without ``select_crew`` (they route nothing).
+# the pipeline and security conductors shipped them from their first release.
+# (The goal conductor's since-retired ``select_crew`` grant is listed per agent
+# below, where the history belongs.)
 _HISTORY_CORE_VERBS: frozenset[str] = frozenset(
     {
         "@kirocrew-core/monitor_start",
@@ -930,8 +931,8 @@ def _install_security_conductor_agent(*, clean: bool = False) -> bool:
     derivation the goal conductor's comment describes — the union of this prompt's
     own "Your tools:" inventory and the skill's real call sites, filtered to what
     registers on each server — lands on exactly that set here: patrol lifecycle,
-    reads, the agent's own ledger, and owner reporting, with no ``select_crew``
-    (this conductor routes nothing). A third byte-identical copy would be
+    reads, the agent's own ledger, and owner reporting. A third byte-identical
+    copy would be
     duplication whose later divergence nothing could detect, and reuse across
     agents is already this file's practice, and ``_filter_auto_approve`` plus
     ``_conductor_mcp_servers`` are the same argument applied one level down.

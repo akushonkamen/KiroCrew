@@ -15,15 +15,15 @@ describe('groupActivityDays', () => {
       [
         { ts: at(0, 9), via: 'chat', project: '/a' },
         { ts: at(2, 8), via: 'chat', project: '/a' },
-        { ts: at(0, 12), via: 'select_crew', project: '/b' },
+        { ts: at(0, 12), via: 'chat', project: '/b' },
         { ts: at(2, 14), via: 'chat', project: '/b' },
         { ts: at(2, 11), via: 'chat', project: '/a' },
       ],
       false,
     )
     expect(days.map((d) => d.dayStart)).toEqual([at(0, 0), at(2, 0)])
-    expect(days[0]).toMatchObject({ chats: 1, routed: 1, projects: ['/a', '/b'], isFloor: false })
-    expect(days[1]).toMatchObject({ chats: 3, routed: 0, projects: ['/a', '/b'] })
+    expect(days[0]).toMatchObject({ chats: 2, projects: ['/a', '/b'], isFloor: false })
+    expect(days[1]).toMatchObject({ chats: 3, projects: ['/a', '/b'] })
     expect(days[1].entries.map((e) => e.ts)).toEqual([at(2, 8), at(2, 11), at(2, 14)])
   })
 

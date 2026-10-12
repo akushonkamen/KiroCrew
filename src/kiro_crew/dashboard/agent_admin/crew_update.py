@@ -38,7 +38,6 @@ if TYPE_CHECKING:
         _revalidate_crew_pin,
         _rollback_promoted_avatar,
         _safe_avatar,
-        _safe_color,
         _sel,
         _StaleBinding,
         _UnverifiableLineage,
@@ -427,22 +426,6 @@ async def api_kirocrew_agent_update(request: web.Request) -> web.Response:
                 )
             agent.display_name = body["display_name"].strip()
             changed.append("display_name")
-        if "triggers" in body:
-            agent.triggers = body["triggers"]
-            changed.append("triggers")
-        if "session_color" in body:
-            _sc = body["session_color"]
-            _norm = _safe_color(_sc)
-            if _sc not in ("", None) and not _norm:
-                return web.json_response(
-                    {
-                        "error": "session_color must be #rrggbb or empty",
-                        "code": "invalid_color_hex",
-                    },
-                    status=400,
-                )
-            agent.session_color = _norm
-            changed.append("session_color")
         _avatar_promoted = False
         _avatar_pin = ""
         _prior_pin: object = None
@@ -450,7 +433,7 @@ async def api_kirocrew_agent_update(request: web.Request) -> web.Response:
         if "avatar" in body:
             _raw_av = body["avatar"]
             _av = _safe_avatar(_raw_av)
-            # Same 400 convention as session_color: junk that coerces to "no
+            # Same 400 convention as reasoning_effort: junk that coerces to "no
             # override" is refused rather than silently clearing the face.
             # None/{} are the explicit "reset to name-derived" spellings, and
             # a well-formed ghost override that collapses all-empty is the

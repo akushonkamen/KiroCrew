@@ -280,7 +280,7 @@ def _governed(rig: _Rig) -> dict[str, Any]:
     _customized(rig)
     return {
         "may_auto_approve": lambda ref: ref
-        not in {"fs_read", "@kirocrew-core", "@global-srv", "@kirocrew-core/select_crew"}
+        not in {"fs_read", "@kirocrew-core", "@global-srv", "@kirocrew-core/skill_fetch"}
     }
 
 

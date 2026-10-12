@@ -71,8 +71,8 @@ async function stills(browser, theme) {
   // Close-up so a reviewer can actually read the 28px face.
   await face.screenshot({ path: join(OUT, `02b-editor-face-hover-closeup-${theme}.png`) })
 
-  // 3: the Avatar row on the Triggers pane — face + text button, same open path.
-  await sheet.getByTestId('crew-rail-routing').click()
+  // 3: the Avatar row on the Avatar pane — face + text button, same open path.
+  await sheet.getByTestId('crew-rail-avatar').click()
   const rowBtn = sheet.getByTestId('open-avatar-builder')
   check(`[${theme}] Avatar row button reads "${EDIT_AVATAR}"`, (await rowBtn.innerText()).trim() === EDIT_AVATAR)
   await sheet.screenshot({ path: join(OUT, `03-editor-avatar-row-${theme}.png`) })

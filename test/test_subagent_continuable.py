@@ -1365,7 +1365,6 @@ class TestContinuationTemplateNamespace:
 
         def enable_delegation():
             cfg = KiroCrewConfig.load()
-            cfg.agents["worker"].triggers = "work"
             cfg.save()
 
         await asyncio.to_thread(enable_delegation)

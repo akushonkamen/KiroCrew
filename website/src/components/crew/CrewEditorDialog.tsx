@@ -48,8 +48,6 @@ import {
   ModelField,
   EffortField,
   DisplayNameField,
-  TriggersField,
-  SessionColorField,
 } from '../../pages/KiroCrewAgentsPage'
 import { INHERIT_MODEL, type CrewEditorController } from './useCrewEditor'
 
@@ -79,13 +77,13 @@ export default function CrewEditorDialog({ ctl }: { ctl: CrewEditorController })
   const {
     editing, editingAgent,
     kiroAgent, setKiroAgent, workspace, setWorkspace, memoryStore,
-    triggers, setTriggers, displayName, setDisplayName, sessionColor, setSessionColor,
+    displayName, setDisplayName,
     editModel, setEditModel, editEffort, setEditEffort, editAvatar,
     kiroAgentOptions, workspaceOptions, modelOptions, availableModels, templateProvenance,
     templateFieldLabel, kirocrewCfg, editorOptionsError, modelsDegraded,
     resolved, resolvedError, effortCapable, effortModel,
     collidingCrews, sharingWorkspace, sharingMemoryStore,
-    pane, requestPane, goToPane, panelId, sections, routingWords, templatePaneActive,
+    pane, requestPane, goToPane, panelId, sections, templatePaneActive,
     wakeJobs, wakeUnknown, boundWebhooks, webhooksUnknown,
     capabilityManaged, capabilityReadFailed, capabilityLoading,
     setCapabilityDirty, setCapabilityBusy, onCapabilitiesSaved, setTemplateDirty,
@@ -194,7 +192,6 @@ export default function CrewEditorDialog({ ctl }: { ctl: CrewEditorController })
                     resolvedModel={resolved?.model || ''}
                     activeSchedules={wakeJobs.filter(j => j.enabled).length}
                     schedulesUnknown={wakeUnknown}
-                    routingWords={routingWords}
                     sharingCrews={collidingCrews.length}
                     workspaceShared={sharingWorkspace.length > 0}
                     memoryShared={sharingMemoryStore.length > 0}
@@ -355,10 +352,8 @@ export default function CrewEditorDialog({ ctl }: { ctl: CrewEditorController })
 
               {pane === 'webhook' && <CrewWebhookSection crew={editing} onNavigateAway={ctl.guardedNavigate} />}
 
-              {pane === 'routing' && (
+              {pane === 'avatar' && (
                 <>
-                  <TriggersField value={triggers} onChange={setTriggers} subject="agent" />
-                  <SessionColorField value={sessionColor} onChange={setSessionColor} subject="agent" />
                   <Field
                     label={i18nT('components.avatarBuilder.field_label')}
                     hint={i18nT('components.avatarBuilder.field_hint')}

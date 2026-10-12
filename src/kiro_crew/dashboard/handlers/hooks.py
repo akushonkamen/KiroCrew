@@ -25,6 +25,12 @@ from kiro_crew.agent import (
 from kiro_crew.agent_capabilities import CapabilityError
 from kiro_crew.agent_discovery import _read_agent_spec, list_agents
 from kiro_crew.config.loader import KiroCrewConfig, data_home
+from kiro_crew.constants import (
+    DENY_CAUSE_AUDIT_UNAVAILABLE,
+    DENY_CAUSE_HOOK_ERROR,
+    DENY_CAUSE_POLICY,
+    DENY_CAUSE_SURFACE_POLICY,
+)
 from kiro_crew.dashboard.state import DashboardState
 from kiro_crew.execution_context import ExecutionContext, clear_session_execution
 from kiro_crew.executors import run_in_embed_pool, run_in_tool_gate_pool
@@ -1177,6 +1183,51 @@ async def api_hooks_agent(request: web.Request) -> web.Response:
 # which compare it to the real event object's kind.
 _EVENT_PERMISSION_REQUEST_KIND = "permission_request"
 
+#: What the MODEL is told when the webhook turn refuses a tool call, keyed by
+#: the SEL ``error`` code the deny branch records: (deny cause, reason). A
+#: webhook turn has no person to ask, so every entry is a HOST deny, and each
+#: owes the in-band notice that corrects kiro-cli's "User denied tool
+#: execution". ``hook_deny`` is not here: its reason is the gate's own.
+_WEBHOOK_DENY_NOTICE: dict[str, tuple[str, str]] = {
+    "no_hook_store": (
+        DENY_CAUSE_SURFACE_POLICY,
+        "this webhook turn has no hook gate to authorize a tool call, so every call is refused",
+    ),
+    "gate_error": (
+        DENY_CAUSE_HOOK_ERROR,
+        "the webhook's hook gate raised while deciding this call",
+    ),
+    "no_interactive_approver": (
+        DENY_CAUSE_SURFACE_POLICY,
+        "a webhook turn has no person to approve a tool call, so only a call a hook "
+        "rule auto-approves can run, and no rule auto-approved this one",
+    ),
+    "child_low_fidelity": (
+        DENY_CAUSE_SURFACE_POLICY,
+        "the call came from a subagent without verifiable security context, and a "
+        "webhook turn has no person to approve it instead",
+    ),
+    "name_grant_headless_reject": (
+        DENY_CAUSE_SURFACE_POLICY,
+        "the hook's name-based grant was withheld, and a webhook turn has no person "
+        "to approve the call instead",
+    ),
+}
+
+
+def _webhook_deny_notice(deny_error: str, decision: Any) -> tuple[str, str]:
+    """The (cause, reason) the model reads for a webhook deny recorded as *deny_error*.
+
+    An unknown code still yields a true host notice rather than none: the
+    alternative is kiro-cli's "user denied", which is false on this surface.
+    """
+    if deny_error == "hook_deny":
+        reason = str(getattr(decision, "reason", "") or "")
+        return DENY_CAUSE_POLICY, reason or "a PreToolUse hook denied the call"
+    return _WEBHOOK_DENY_NOTICE.get(
+        deny_error, (DENY_CAUSE_SURFACE_POLICY, "this webhook turn refused the call")
+    )
+
 
 def _capability_refusal_text(
     exc: CapabilityError | CapabilityStartupError, agent: str | None
@@ -1239,6 +1290,7 @@ async def _run_hook_inner(
         hook_gate_kwargs,
         identity_grant_covers_child,
     )
+    from kiro_crew.llm_helpers import _steer_host_deny
     from kiro_crew.providers.base import EVENT_COMPLETE, EVENT_TEXT_CHUNK  # noqa: F811
 
     execution: ExecutionContext = (
@@ -1431,6 +1483,13 @@ async def _run_hook_inner(
                         )
                     except Exception:
                         logger.debug("denial record after audit failure also failed", exc_info=True)
+                    await _steer_host_deny(
+                        client,
+                        event,
+                        "a hook rule auto-approved it, but the security event log "
+                        "could not record the approval",
+                        cause=DENY_CAUSE_AUDIT_UNAVAILABLE,
+                    )
                     await client.reject_tool(event.request_id)
                 else:
                     approval_sent = await client.approve_tool(event.request_id)
@@ -1460,6 +1519,10 @@ async def _run_hook_inner(
                     request_id=str(event.request_id),
                     error=deny_error,
                 )
+                # No person is attached to a webhook turn, so every deny here
+                # is the host's: tell the model which one before the wire.
+                _deny_cause, _deny_reason = _webhook_deny_notice(deny_error, decision)
+                await _steer_host_deny(client, event, _deny_reason, cause=_deny_cause)
                 await client.reject_tool(event.request_id)
         elif event.kind == EVENT_COMPLETE:
             _complete_event = event

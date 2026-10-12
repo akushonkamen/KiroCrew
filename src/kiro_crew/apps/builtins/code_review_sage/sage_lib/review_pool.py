@@ -103,6 +103,13 @@ try:  # SEL audit — the runtime layer has no audit_source, so the pool emits i
 except Exception:  # pragma: no cover - standalone / test fallback
     _sel = None  # type: ignore[assignment]
 
+try:  # the in-band notice every headless host deny steers before it rejects
+    from kiro_crew.constants import DENY_CAUSE_POLICY
+    from kiro_crew.llm_helpers import _steer_host_deny
+except Exception:  # pragma: no cover - standalone / test fallback
+    DENY_CAUSE_POLICY = "policy"
+    _steer_host_deny = None  # type: ignore[assignment]
+
 try:  # same resolver the AcpRuntime spawn path uses to locate the agent CLI
     from kiro_crew.kiro_cli import resolve_kiro_cli
 except Exception:  # pragma: no cover - standalone / test fallback
@@ -664,6 +671,13 @@ class ReviewPool:
                                     request_id=req_id,
                                     outcome="rejected_hook_deny",
                                 )
+                                # No person reviews these calls, so the deny is
+                                # the host's: tell the reviewer model which rule
+                                # refused it before kiro-cli reports a user denial.
+                                if _steer_host_deny is not None:
+                                    await _steer_host_deny(
+                                        handle, ev, reason, cause=DENY_CAUSE_POLICY
+                                    )
                                 await handle.reject_tool(req_id)
                                 continue
                             try:

@@ -24,7 +24,13 @@ from kiro_crew.config.loader import (
     update_config_locked,
 )
 from kiro_crew.config.paths import data_home
-from kiro_crew.constants import BANNER
+from kiro_crew.constants import (
+    BANNER,
+    DENY_CAUSE_APPROVAL_UNDELIVERABLE,
+    DENY_CAUSE_AUDIT_UNAVAILABLE,
+    DENY_CAUSE_HOOK_ERROR,
+    DENY_CAUSE_POLICY,
+)
 from kiro_crew.hooks import (
     TOOL_DENY,
     HookManager,
@@ -32,6 +38,7 @@ from kiro_crew.hooks import (
     mcp_identity_ref,
     target_paths,
 )
+from kiro_crew.llm_helpers import _steer_host_deny
 from kiro_crew.messaging.commands import compact_unsupported_backend
 from kiro_crew.permission_floor import (
     OUTCOME_PENDING_APPROVAL,
@@ -714,12 +721,49 @@ async def _audit_refusal(gate: _ToolGate, event: LLMEvent, *, error: str) -> Non
         logger.warning("SEL audit failed for a refusal; refusing anyway", exc_info=True)
 
 
+async def _refuse_host_deny(
+    provider: LLMProvider,
+    gate: _ToolGate,
+    event: LLMEvent,
+    *,
+    error: str,
+    cause: str,
+    reason: str,
+) -> None:
+    """Refuse a request the HOST declined, and tell the model so first.
+
+    kiro-cli hands the model "User denied tool execution" for every rejection,
+    which is false on every path through here: the person at the terminal was
+    never asked, or said yes. Without a correction the reply they read next
+    apologises for a refusal they never made, contradicting the notice printed
+    above it. The in-band notice is steered while the request is still
+    unanswered, which is what gets it queued into the running turn (see
+    ``kiro_crew.deny_notice``).
+
+    Audit first, then the notice, then the wire. *cause* and *reason* are what
+    the MODEL reads; the audit carries only the stable *error* code, and the
+    terminal notice each caller prints afterwards is the person's. Best-effort:
+    a backend without a steer channel, or a steer that fails, leaves the reject
+    exactly as it was. A cancellation inside the steer still answers the wire
+    without waiting on it (``_steer_host_deny`` schedules the reject and
+    re-raises), so the session-abort contract is unchanged.
+
+    The person's own refusal must NOT come through here: there kiro-cli's
+    wording is the truth.
+    """
+    await _audit_refusal(gate, event, error=error)
+    await _steer_host_deny(provider, event, reason, cause=cause)
+    await provider.reject_tool(event.request_id)
+
+
 async def _reject_internal_failure(
     provider: LLMProvider,
     gate: _ToolGate,
     event: LLMEvent,
     *,
     error: str,
+    cause: str,
+    reason: str,
     notice: str,
 ) -> None:
     """Answer a request whose gate or consent UI failed before a decision.
@@ -728,8 +772,7 @@ async def _reject_internal_failure(
     transport response comes before the notice so a broken output stream cannot
     leave the backend waiting on a question nobody can answer.
     """
-    await _audit_refusal(gate, event, error=error)
-    await provider.reject_tool(event.request_id)
+    await _refuse_host_deny(provider, gate, event, error=error, cause=cause, reason=reason)
     _print_permission_notice(notice)
 
 
@@ -842,8 +885,17 @@ async def _answer_permission(
     # ``AcpEvent.child_unconditional_grant_eligible`` hoists for the grant
     # paths, so consume the property rather than re-spelling it.
     if not event.child_unconditional_grant_eligible:
-        await _audit_refusal(gate, event, error=_CHILD_UNVERIFIED_CODE)
-        await provider.reject_tool(event.request_id)
+        await _refuse_host_deny(
+            provider,
+            gate,
+            event,
+            error=_CHILD_UNVERIFIED_CODE,
+            cause=DENY_CAUSE_POLICY,
+            reason=(
+                "it came from a subagent without verifiable security context, "
+                "so it cannot be shown for approval"
+            ),
+        )
         try:
             safe_title = _for_consent(title, stream=sys.stderr)
             _print_permission_notice(
@@ -883,6 +935,8 @@ async def _answer_permission(
             gate,
             event,
             error=_GATE_FAILURE_CODE,
+            cause=DENY_CAUSE_HOOK_ERROR,
+            reason="the CLI's security gate raised while deciding this call",
             notice=(
                 "\nDenied automatically: the security gate could not verify this tool call.\n"
                 "   Fix the gate error, then retry the tool call."
@@ -893,8 +947,14 @@ async def _answer_permission(
         # Not a question for the user: a policy denial is not theirs to
         # override from here. The audit carries a stable code; the reason is
         # for the person at the terminal, and is sanitised on the way there.
-        await _audit_refusal(gate, event, error=_HOOK_DENY_CODE)
-        await provider.reject_tool(event.request_id)
+        await _refuse_host_deny(
+            provider,
+            gate,
+            event,
+            error=_HOOK_DENY_CODE,
+            cause=DENY_CAUSE_POLICY,
+            reason=decision.reason or "blocked by security policy",
+        )
         try:
             reason = (
                 _for_consent(decision.reason, stream=sys.stderr) or "blocked by security policy"
@@ -909,8 +969,17 @@ async def _answer_permission(
         # Refusing to ASK, not a gate rejection: with no trusted shell signal
         # the only thing left to show the human is the LLM-authored title, and
         # consent to a description is not consent to what runs.
-        await _audit_refusal(gate, event, error=_UNVERIFIED_SHELL_CODE)
-        await provider.reject_tool(event.request_id)
+        await _refuse_host_deny(
+            provider,
+            gate,
+            event,
+            error=_UNVERIFIED_SHELL_CODE,
+            cause=DENY_CAUSE_POLICY,
+            reason=(
+                "what it runs could not be verified, so it cannot be shown for "
+                "approval by its description alone"
+            ),
+        )
         try:
             safe_title = _for_consent(title, stream=sys.stderr)
             # Name what actually failed. A request whose kind reads as a command
@@ -937,6 +1006,8 @@ async def _answer_permission(
             gate,
             event,
             error=_PROMPT_FAILURE_CODE,
+            cause=DENY_CAUSE_APPROVAL_UNDELIVERABLE,
+            reason="the terminal permission prompt could not be opened",
             notice=(
                 "\nDenied automatically: the permission prompt could not be opened.\n"
                 "   Retry from a usable terminal."
@@ -945,8 +1016,14 @@ async def _answer_permission(
         return
 
     if not can_prompt:
-        await _audit_refusal(gate, event, error=_NONINTERACTIVE_CODE)
-        await provider.reject_tool(event.request_id)
+        await _refuse_host_deny(
+            provider,
+            gate,
+            event,
+            error=_NONINTERACTIVE_CODE,
+            cause=DENY_CAUSE_APPROVAL_UNDELIVERABLE,
+            reason="this CLI invocation has no terminal to ask the person for approval",
+        )
         try:
             safe_title = _for_consent(title, stream=sys.stderr)
             _print_permission_notice(
@@ -998,6 +1075,8 @@ async def _answer_permission(
             gate,
             event,
             error=_PROMPT_FAILURE_CODE,
+            cause=DENY_CAUSE_APPROVAL_UNDELIVERABLE,
+            reason="the terminal permission prompt could not be rendered or read",
             notice=(
                 "\nDenied automatically: the permission prompt could not be rendered or read.\n"
                 "   Retry the tool call from a usable terminal."
@@ -1028,8 +1107,17 @@ async def _answer_permission(
             await _audit_off_loop(gate, event, OUTCOME_PENDING_APPROVAL, critical=True)
         except Exception:
             logger.warning("SEL audit unwritable; refusing the approved call", exc_info=True)
-            await _audit_refusal(gate, event, error=_UNAUDITABLE_CODE)
-            await provider.reject_tool(event.request_id)
+            await _refuse_host_deny(
+                provider,
+                gate,
+                event,
+                error=_UNAUDITABLE_CODE,
+                cause=DENY_CAUSE_AUDIT_UNAVAILABLE,
+                reason=(
+                    "the person approved it, but the security event log could not "
+                    "record the approval"
+                ),
+            )
             try:
                 safe_title = _for_consent(title, stream=sys.stderr)
                 _print_permission_notice(
@@ -1049,6 +1137,9 @@ async def _answer_permission(
         # the deny paths audit-or-deny would trade availability for no security
         # gain -- it would turn a refusal into an error. Fail-closed only has
         # meaning where the alternative is execution.
+        #
+        # The one bare reject in this module: the person said no, so kiro-cli's
+        # "User denied tool execution" is true and no host notice is owed.
         await _audit_refusal(gate, event, error=_USER_DENY_CODE)
         await provider.reject_tool(event.request_id)
 

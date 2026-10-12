@@ -67,8 +67,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any, NamedTuple
 
 from kiro_crew.acp.types import EVENT_COMPLETE, EVENT_PERMISSION_REQUEST, EVENT_TEXT_CHUNK
+from kiro_crew.constants import DENY_CAUSE_SURFACE_POLICY
 from kiro_crew.label_guard import is_verdict_reply, looks_like_prose
-from kiro_crew.llm_helpers import background_turn
+from kiro_crew.llm_helpers import _steer_host_deny, background_turn
 from kiro_crew.loop_lock import LoopBoundLock
 from kiro_crew.platform import redact_log_via_context
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
@@ -414,6 +415,15 @@ async def _stream_title(client: Any, prompt: str, *, source: str) -> str:
                 outcome="denied",
                 source=source,
                 resources=str(event.request_id),
+            )
+            # The surface refused, not a person: say so before the wire, or the
+            # model reads "User denied tool execution" and may title the chat
+            # after a refusal nobody made.
+            await _steer_host_deny(
+                client,
+                event,
+                "this title-naming turn is tool-free by contract; answer from the prompt alone",
+                cause=DENY_CAUSE_SURFACE_POLICY,
             )
             await client.reject_tool(event.request_id)
         elif event.kind == EVENT_COMPLETE:

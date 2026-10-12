@@ -1,23 +1,30 @@
-"""Tests for ``dashboard_save`` -- the call that stores a composed page.
+"""Tests for ``dashboard_save`` -- the call that STAGES a composed page.
 
-The property guarded hardest here is the one a save introduces that no sibling
-panel tool had: a save MINTS AN ARTIFACT, and the artifact's ``bound_to`` is what
-decides whose Dashboard tab will render it. So the binding is derived from the
-vetted caller on the server and is never read out of the body -- a caller that
-sends one is refused, and a page already bound to another crewmate is never
-written over.
+The property guarded hardest here is the gate: a save stores NOTHING. It stages
+the composed page beside the crewmate's record and hands back a link, and
+``dashboard_apply`` is the only call that mints or updates the artifact. So every
+storage test in this file goes through both calls, and the pair of tests at the
+top prove the halves are really separate -- a save leaves the store untouched, and
+an apply with nothing staged writes nothing either.
 
-The second property is that nothing here reimplements the store's own write gate.
-Every save lands through ``ArtifactStore.create`` / ``.update``, which run
-``canonical_package_content`` and therefore the package's size, surrogate, closed
--catalog and store-ownership guards. The refusal tests below prove that by sending
-packages each guard refuses and asserting the save answers 400 rather than storing
-them.
+The second property is the one the binding carries: the artifact's ``bound_to``
+decides whose Dashboard tab renders this page, so it is derived from the vetted
+caller on the server and never read out of the body -- a caller that sends one is
+refused, a staged page bound elsewhere is refused at the apply rather than
+re-stamped, and a page already bound to another crewmate is never written over.
+
+The third is that nothing here reimplements the store's own write gate. The save
+runs ``canonical_package_content`` -- the same function ``ArtifactStore.create``
+and ``.update`` run -- so the package's size, surrogate and closed-catalog guards
+answer while the agent is still composing rather than after a person has approved
+the page. The refusal tests below prove that by sending packages each guard
+refuses and asserting the save answers 400 with nothing staged.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -77,26 +84,11 @@ class _Store:
         #: the binding lookup must not answer "absent" for, because it may be the
         #: one bound here -- that is exactly what could not be read.
         self.unreadable: set[str] = set()
-        #: Records the LISTING never showed, because their metadata will not read.
-        #: Invisible to the scan rather than skipped by it, which is why the store
-        #: reports them separately.
-        self.unlistable = 0
 
     # -- the surface the handler uses -------------------------------------- #
 
     def list(self, *, kind: str | None = None, **_kw: Any) -> list[SimpleNamespace]:
         return [r for r in self.records.values() if kind is None or r.kind == kind]
-
-    def unreadable_record_count(self) -> int:
-        """How many stored records the LISTING itself could not show.
-
-        A different kind of blindness from :attr:`unreadable`: that one is a record
-        the listing named and ``get`` then refused, while this is a record whose
-        metadata will not read at all, so ``list`` skips it and its kind is never
-        known. The binding lookup asks this once its scan has found nothing,
-        because a record it never saw could be the one bound here.
-        """
-        return self.unlistable
 
     def get(self, slug: str, **_kw: Any) -> SimpleNamespace:
         from kiro_crew.artifact_store.model import ArtifactNotFoundError
@@ -192,15 +184,181 @@ async def _save(client: TestClient, body: dict[str, Any]):
     return await client.post("/api/agent-panel/dashboard/save", json=body)
 
 
+async def _apply(client: TestClient):
+    """The person's "yes". Takes no body, like the route."""
+    return await client.post("/api/agent-panel/dashboard/apply", json={})
+
+
+async def _save_and_apply(client: TestClient, body: dict[str, Any]):
+    """Compose, stage, and install -- the two calls a page now goes live through.
+
+    Returned as the APPLY's response, because that is the one carrying what landed:
+    the version, whether it cut one, and the shape of the stored package. A save
+    that refuses answers here instead, so a caller can still assert on a 400
+    without knowing which half refused.
+    """
+    staged = await _save(client, body)
+    if staged.status != 200:
+        return staged
+    return await _apply(client)
+
+
 # --------------------------------------------------------------------------- #
-# 1. A saved page round-trips
+# 0. THE GATE: a save stages, an apply installs
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_save_stages_the_page_and_stores_nothing(monkeypatch, store):
+    """The whole gate in one test: nothing is written and nothing is live.
+
+    The store is untouched -- not an empty page, not a version 0 record, nothing
+    at all -- and the response says ``staged`` rather than ``saved``, carrying the
+    link a person opens. An agent that read ``saved`` here would tell them their
+    dashboard had changed when the next thing it has to do is ask them.
+    """
+    async with _client(monkeypatch) as client:
+        resp = await _save(client, _package_body())
+        assert resp.status == 200, await resp.text()
+        payload = await resp.json()
+
+    assert "saved" not in payload, "a save reported a stored page"
+    staged = payload["staged"]
+    assert staged["fields"] == 2
+    assert staged["blocks"] == 2
+    assert staged["preview_url"] == f"/api/members/{SLUG}/dashboard?preview=1"
+    # The one instruction, travelling with the thing it is about.
+    assert "dashboard_apply" in payload["next"]
+    # NOTHING STORED. This is the assertion the whole ruling rests on.
+    assert store.records == {}
+    assert store.updates == []
+
+
+async def test_the_apply_is_what_installs_the_staged_page(monkeypatch, store):
+    """The other half: after the person says yes, the artifact exists."""
+    async with _client(monkeypatch) as client:
+        assert (await _save(client, _package_body())).status == 200
+        assert store.records == {}, "the save wrote before anybody was asked"
+        resp = await _apply(client)
+        assert resp.status == 200, await resp.text()
+        saved = (await resp.json())["saved"]
+
+    assert saved["version"] == 1
+    assert saved["versioned"] is True
+    stored = parse_package(store.get(_page_slug(store)).content)
+    assert stored["bound_to"] == f"crewmate:{SLUG}"
+
+
+async def test_an_apply_with_nothing_staged_writes_nothing(monkeypatch, store):
+    """No save, no page. The template path answers, and it has nothing either."""
+    async with _client(monkeypatch) as client:
+        resp = await _apply(client)
+        assert resp.status == 400, await resp.text()
+
+    assert store.records == {}
+    assert store.updates == []
+
+
+async def test_a_staged_page_is_consumed_by_the_apply_that_installs_it(monkeypatch, store):
+    """ "Keep this one" cannot be answered twice off a single save.
+
+    The staged page is discarded inside the same lock that writes it, so a second
+    apply finds nothing rather than writing the same package again -- which on the
+    update branch would be a second version of a layout nobody changed.
+    """
+    async with _client(monkeypatch) as client:
+        assert (await _save(client, _package_body())).status == 200
+        assert (await _apply(client)).status == 200
+        second = await _apply(client)
+        assert second.status == 400, await second.text()
+
+    assert len(store.records) == 1
+    assert store.updates == []
+
+
+async def test_a_second_save_replaces_the_staged_page_rather_than_queueing_it(monkeypatch, store):
+    """One page is offered at a time, so an apply cannot install a stale compose.
+
+    Two saves and one apply: what lands is the SECOND page, because staging
+    replaces. A store holding two staged pages would make the person's "yes"
+    ambiguous, which is the reason both kinds of staged page share one file.
+    """
+    async with _client(monkeypatch) as client:
+        assert (await _save(client, _package_body())).status == 200
+        second = _package_body()
+        second["view"]["blocks"].append({"id": "extra", "type": "stat", "fields": ["open_prs"]})
+        assert (await _save(client, second)).status == 200
+        assert (await _apply(client)).status == 200
+
+    stored = parse_package(store.get(_page_slug(store)).content)
+    assert [b["id"] for b in stored["view"]["blocks"]] == ["lead", "note", "extra"]
+    assert len(store.records) == 1
+
+
+async def test_a_staged_page_bound_elsewhere_is_refused_at_the_apply(monkeypatch, store):
+    """A mismatched binding is refused, never re-stamped onto the caller's own.
+
+    Re-stamping would change the page after it was approved, and the binding is
+    the authorization decision -- so the only safe answer is to make the agent
+    compose and ask again. Reached by staging a package the save route would never
+    produce, which is what an older staging file on disk looks like.
+    """
+    from kiro_crew.artifact_store.dashboard_package import canonical_package_content
+    from kiro_crew.dashboard_templates import instance as instance_store
+
+    theirs = _package_body()
+    theirs["kind"] = DASHBOARD_KIND
+    theirs["bound_to"] = f"crewmate:{OTHER_SLUG}"
+    instance_store.stage_package_preview(
+        SLUG, content=canonical_package_content(json.dumps(theirs))
+    )
+
+    async with _client(monkeypatch) as client:
+        resp = await _apply(client)
+        assert resp.status == 400, await resp.text()
+        assert (await resp.json())["code"] == "binding_mismatch"
+
+    assert store.records == {}
+
+
+async def test_the_apply_tells_an_open_tab_the_page_changed(monkeypatch, store):
+    """The frame belongs to the apply, because that is when a reader's page moves.
+
+    A save broadcasts nothing: the live page is still the live page, and a frame
+    announcing a staged one would make every open tab refetch a document identical
+    to the one it holds.
+    """
+    frames: list[tuple[str, dict[str, Any]]] = []
+
+    async def _resolve(_request, _operation):
+        return (SLUG, CREW, "slot-1"), None
+
+    monkeypatch.setattr(routes, "_resolve_dashboard_caller", _resolve)
+    app = web.Application()
+    app["state"] = SimpleNamespace(
+        broadcast_ws=lambda name, payload=None: frames.append((name, payload or {}))
+    )
+    routes.register_agent_panel_routes(app)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        assert (await _save(client, _package_body())).status == 200
+        assert frames == [], "a save announced a page nobody can see yet"
+        assert (await _apply(client)).status == 200
+    finally:
+        await client.close()
+
+    assert frames == [("dashboard_instance_changed", {"slug": SLUG})]
+
+
+# --------------------------------------------------------------------------- #
+# 1. An applied page round-trips
 # --------------------------------------------------------------------------- #
 
 
 async def test_a_saved_page_is_read_back_as_the_package_that_was_sent(monkeypatch, store):
-    """Save, then read: the stored package carries the model, view and theme."""
+    """Save, apply, then read: the stored package carries model, view and theme."""
     async with _client(monkeypatch) as client:
-        resp = await _save(client, _package_body())
+        resp = await _save_and_apply(client, _package_body())
         assert resp.status == 200, await resp.text()
         saved = (await resp.json())["saved"]
 
@@ -238,9 +396,9 @@ async def test_the_binding_comes_from_the_caller_and_the_body_cannot_carry_one(m
 
 async def test_a_second_save_of_the_same_layout_creates_no_new_version(monkeypatch, store):
     async with _client(monkeypatch) as client:
-        first = await _save(client, _package_body())
+        first = await _save_and_apply(client, _package_body())
         assert first.status == 200
-        again = await _save(client, _package_body())
+        again = await _save_and_apply(client, _package_body())
         assert again.status == 200
         second = (await again.json())["saved"]
 
@@ -252,10 +410,10 @@ async def test_a_second_save_of_the_same_layout_creates_no_new_version(monkeypat
 async def test_a_changed_layout_does_cut_a_version(monkeypatch, store):
     """The control for the test above: a real change must still be versioned."""
     async with _client(monkeypatch) as client:
-        assert (await _save(client, _package_body())).status == 200
+        assert (await _save_and_apply(client, _package_body())).status == 200
         changed = _package_body()
         changed["theme"]["tokens"]["--accent"] = "oklch(0.6 0.2 20)"
-        resp = await _save(client, changed)
+        resp = await _save_and_apply(client, changed)
         assert resp.status == 200
         saved = (await resp.json())["saved"]
 
@@ -314,15 +472,14 @@ async def test_a_lone_surrogate_is_refused(monkeypatch, store):
     assert store.records == {}
 
 
-async def test_a_lone_surrogate_is_refused_by_the_real_store_too(monkeypatch, tmp_path):
-    """The same body against ``ArtifactStore`` itself, not the stand-in above.
+async def test_a_lone_surrogate_never_reaches_the_real_store_either(monkeypatch, tmp_path):
+    """The same body with a REAL store behind the route, which it must never reach.
 
-    The stand-in cannot answer this one. It calls the dashboard gate directly, so
-    it answers 400 whatever the real store does; the real store's FIRST call is
-    the generic ``_validate_content``, which measures content by encoding it, and
-    content holding an unpaired surrogate cannot be encoded at all. That function
-    now refuses it as an ``ArtifactValidationError``, so this route's 400 arm
-    catches it. Pinned end to end here, and at the store itself in
+    The refusal is the save's now, because the save runs the dashboard gate itself
+    and nothing is handed to a store until an apply. So the thing worth pinning
+    with a real store wired up is that the store stays EMPTY: no record, and no
+    apply to make one, because the package was refused while the agent was still
+    composing. The store's own refusal, for every other caller, is pinned in
     ``test_artifact_update_refuses_a_surrogate_the_same_way``.
     """
     from kiro_crew.artifacts import ArtifactStore
@@ -337,6 +494,8 @@ async def test_a_lone_surrogate_is_refused_by_the_real_store_too(monkeypatch, tm
         )
         assert resp.status == 400, await resp.text()
         assert (await resp.json())["code"] == "invalid_package"
+        # And nothing was staged for an apply to pick up.
+        assert (await _apply(client)).status == 400
     assert real.list(kind=DASHBOARD_KIND) == []
 
 
@@ -400,7 +559,7 @@ async def test_a_save_is_refused_when_the_binding_cannot_be_proven(monkeypatch, 
     store.unreadable.add(existing.slug)
 
     async with _client(monkeypatch) as client:
-        resp = await _save(client, _package_body())
+        resp = await _save_and_apply(client, _package_body())
         assert resp.status == 400, await resp.text()
         assert "could not be read" in (await resp.json())["error"]
 
@@ -408,105 +567,106 @@ async def test_a_save_is_refused_when_the_binding_cannot_be_proven(monkeypatch, 
     assert store.updates == []
 
 
-async def test_a_save_is_refused_when_a_record_never_reached_the_listing(monkeypatch, store):
-    """The other blindness: a record whose metadata will not read is never listed.
+async def test_two_overlapping_applies_leave_one_page(monkeypatch, store):
+    """Two applies racing for one staged page must install it once.
 
-    The scan cannot skip what it never saw, so the store reports the count and the
-    lookup refuses on it. Same consequence for this route as an unopenable record
-    -- answering "no package" would mint a second one under this binding -- so the
-    save must be refused here too, with nothing created.
-    """
-    store.unlistable = 1
-    async with _client(monkeypatch) as client:
-        resp = await _save(client, _package_body())
-        assert resp.status == 400, await resp.text()
-        assert "will not read" in (await resp.json())["error"]
+    The STAGING CLAIM is what makes this safe, and it is a stronger guarantee than
+    the per-binding lock alone: selection, commit and discard are one critical
+    section, so the second apply cannot even reach the artifact lookup -- the page
+    was consumed before it got the staging lock. That is the assertion below, and
+    it is the one that goes red if the claim is removed: with the selection outside
+    the lock both applies read the same staged page, both find no artifact, and
+    ``create`` disambiguates two slugs rather than colliding them, so one crewmate
+    ends up with two packages. The read path resolves a binding to ONE slug, so the
+    loser's page and its whole version history would be invisible rather than
+    merged.
 
-    assert store.records == {}
-    assert store.updates == []
-
-
-async def test_two_overlapping_first_saves_leave_one_page(monkeypatch, store):
-    """Two first saves racing for one binding must not both create.
-
-    The store locks each write on its own, which is a different guarantee: a
-    crewmate's FIRST save asks whether a page exists and then creates one, and
-    ``create`` disambiguates two slugs rather than colliding them, so two lookups
-    that both answer absent produce two artifacts under one binding. The read
-    path resolves a binding to ONE slug, so the loser's page and its whole
-    version history would be invisible rather than merged.
-
-    NO TIMEOUT DECIDES THE PASS. The first lookup parks until the second request
-    CONTENDS for the binding lock, and that contention is the only thing that
-    releases it, so the test cannot pass by a wait expiring while the machine is
-    busy. If the signal never comes the test fails and says so, which is also
-    exactly what happens when the lock is removed: with no lock there is nothing
-    to contend for, so nothing releases the parked lookup. The wait therefore
-    carries a bound only so a real defect reports rather than hangs.
+    NO TIMEOUT DECIDES THE PASS: both requests are awaited to completion and the
+    counts are read afterwards.
 
     ``_page_slug`` asserts the invariant the reader depends on: exactly one page
     bound here, because two make its own resolver's answer arbitrary.
     """
     import asyncio as _asyncio
 
-    contended = threading.Event()
-    attempts = {"n": 0}
+    looked_up = {"n": 0}
     counting = threading.Lock()
-    real_lock = routes._page_save_lock
     real_find = routes._find_page
 
-    class _WatchedLock:
-        """The real lock, announcing each attempt to take it BEFORE it blocks.
+    def _counting_find(st: Any, binding: str) -> Any:
+        with counting:
+            looked_up["n"] += 1
+        return real_find(st, binding)
 
-        Announcing before acquiring is what makes this deadlock-free: the parked
-        first lookup is holding the lock, so a signal sent after acquisition
-        could never arrive.
-        """
-
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
-
-        def __enter__(self) -> "_WatchedLock":
-            with counting:
-                attempts["n"] += 1
-                if attempts["n"] >= 2:
-                    contended.set()
-            self._inner.acquire()
-            return self
-
-        def __exit__(self, *_exc: Any) -> bool:
-            self._inner.release()
-            return False
-
-    def _watched(binding: str) -> Any:
-        return _WatchedLock(real_lock(binding))
-
-    def _racing_find(st: Any, binding: str) -> Any:
-        found = real_find(st, binding)
-        if found is None:
-            # Only the FIRST-save path parks, and only until somebody else wants
-            # this binding. A caller that already sees a page has no race to lose.
-            assert contended.wait(timeout=30), (
-                "the second save never contended for the binding lock, so nothing "
-                "serialized the two: the lookup and the write are not under one lock"
-            )
-        return found
-
-    monkeypatch.setattr(routes, "_page_save_lock", _watched)
-    monkeypatch.setattr(routes, "_find_page", _racing_find)
+    monkeypatch.setattr(routes, "_find_page", _counting_find)
 
     async with _client(monkeypatch) as client:
-        first, second = await _asyncio.gather(
-            _save(client, _package_body()), _save(client, _package_body())
-        )
-        assert first.status == 200, await first.text()
-        assert second.status == 200, await second.text()
+        assert (await _save(client, _package_body())).status == 200
+        first, second = await _asyncio.gather(_apply(client), _apply(client))
+        codes = sorted([first.status, second.status])
 
+    # One installs, one finds nothing staged. Which one wins is the scheduler's,
+    # so the pair is asserted rather than either request.
+    assert codes == [200, 400], codes
     assert len(store.records) == 1, "a race created a second page under one binding"
     assert _page_slug(store) in store.records
-    # One create and one update, in that order: the second save found the first
-    # one's page rather than minting its own.
-    assert len(store.updates) == 1
+    # ONE artifact lookup for two applies: the loser never reached it, because the
+    # staged page was claimed and discarded under the lock it was waiting on.
+    assert looked_up["n"] == 1, "both applies reached the artifact lookup"
+    assert store.updates == []
+
+
+async def test_a_save_landing_during_an_apply_is_not_discarded(monkeypatch, store):
+    """The staging lock is HELD across the artifact write, so no save is lost.
+
+    The race this closes was a data loss rather than a stale read. With the staged
+    page read outside the lock, a save landing during the apply's artifact write
+    staged a second page and the discard that followed the commit deleted THAT
+    page -- unstored, while the agent had been told its compose succeeded.
+
+    Asserted on the lock itself rather than by racing a second request, so no
+    timing decides the pass: while the apply is inside ``store.create``, a
+    non-blocking attempt on the instance directory's own lock file must FAIL. A
+    save needs that same lock to stage, so an attempt that cannot take it is a
+    save that cannot land mid-write. The control is the attempt after the request
+    returns, which must succeed.
+    """
+    from pathlib import Path
+
+    from kiro_crew.dashboard_templates import instance as instance_store
+    from kiro_crew.platform_compat import release_lock, try_acquire_lock
+
+    lock_path = Path(instance_store.instance_dir(SLUG)) / instance_store._LOCK_FILE
+    held: list[bool] = []
+
+    def _probe() -> bool:
+        """Whether the staging lock is FREE right now, from another descriptor."""
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if try_acquire_lock(fd, exclusive=True):
+                release_lock(fd)
+                return True
+            return False
+        finally:
+            os.close(fd)
+
+    real_create = store.create
+
+    def _probing_create(**kwargs: Any) -> Any:
+        # INSIDE the artifact write, which is the window the old code left open.
+        held.append(not _probe())
+        return real_create(**kwargs)
+
+    monkeypatch.setattr(store, "create", _probing_create)
+
+    async with _client(monkeypatch) as client:
+        assert (await _save(client, _package_body())).status == 200
+        assert (await _apply(client)).status == 200
+
+    assert held == [True], "the staging lock was free while the artifact was written"
+    # The control: nothing holds it once the request is done, so the probe above
+    # measured the claim and not a lock this test never released.
+    assert _probe() is True
 
 
 async def test_the_store_is_built_off_the_event_loop(monkeypatch, store):
@@ -526,7 +686,7 @@ async def test_the_store_is_built_off_the_event_loop(monkeypatch, store):
 
     monkeypatch.setattr(routes, "_dashboard_artifact_store", _store_from)
     async with _client(monkeypatch) as client:
-        assert (await _save(client, _package_body())).status == 200
+        assert (await _save_and_apply(client, _package_body())).status == 200
 
     assert seen, "the route never asked for a store"
     assert loop_thread not in seen, "the artifact store was built on the event loop"
@@ -550,10 +710,10 @@ async def test_the_history_session_is_resolved_off_the_event_loop(monkeypatch, s
 
     monkeypatch.setattr(routes, "_history_session", _history_from)
     async with _client(monkeypatch) as client:
-        assert (await _save(client, _package_body())).status == 200
+        assert (await _save_and_apply(client, _package_body())).status == 200
         changed = _package_body()
         changed["theme"]["tokens"]["--accent"] = "oklch(0.3 0.02 10)"
-        assert (await _save(client, changed)).status == 200
+        assert (await _save_and_apply(client, changed)).status == 200
 
     assert seen, "the update never resolved a history session"
     assert loop_thread not in seen, "the history session was resolved on the event loop"
@@ -597,7 +757,7 @@ async def test_a_saved_package_becomes_the_model_the_write_path_checks(monkeypat
     assert before.from_package is False
 
     async with _client(monkeypatch) as client:
-        assert (await _save(client, _package_body())).status == 200
+        assert (await _save_and_apply(client, _package_body())).status == 200
 
     # AFTER: the answer is now this crewmate's own stored package, bound to it and
     # LIVE. The Model projection ships with the display-reader change, so it is
@@ -663,7 +823,7 @@ async def test_an_ordinary_field_name_still_saves(monkeypatch, store):
     is this file's ordinary one, whose names no redactor touches.
     """
     async with _client(monkeypatch) as client:
-        resp = await _save(client, _package_body())
+        resp = await _save_and_apply(client, _package_body())
         assert resp.status == 200, await resp.text()
 
     stored = parse_package(store.get(_page_slug(store)).content)
@@ -696,6 +856,56 @@ async def test_a_credential_shaped_block_id_is_refused_too(monkeypatch, store):
     assert store.records == {}
 
 
+async def test_a_credential_shaped_theme_token_is_refused_too(monkeypatch, store):
+    """The THIRD name set a package carries, and the one whose grammar hides it.
+
+    A field name and a block id match ``[a-z][a-z0-9_]{0,63}``. A theme token is a
+    CSS custom property, ``--[a-z][a-z0-9-]{0,63}``, so a lowercase HYPHENATED
+    look-alike satisfies it where an underscored one never could -- which is how a
+    check written for the first two name sets leaves this one open.
+
+    Refused rather than redacted on the way out, for the reason the other two are:
+    a token key is a JOIN KEY. The page's own style references the variable by
+    name, so a redactor rewriting it hands back a stylesheet pointing at a property
+    that does not exist. There is no masked form that still works.
+    """
+    from kiro_crew.platform import redact_via_context
+
+    token_key = "--xoxb-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+    # The two halves of the premise, each asserted rather than assumed.
+    assert redact_via_context(token_key) != token_key, "not credential-shaped here"
+    assert redact_via_context("--accent") == "--accent", "control token is not redacted"
+
+    body = _package_body()
+    body["theme"]["tokens"][token_key] = "oklch(0.5 0.1 200)"
+
+    async with _client(monkeypatch) as client:
+        resp = await _save(client, body)
+        assert resp.status == 400, await resp.text()
+        payload = await resp.json()
+
+    assert payload["code"] == "unsafe_declared_name"
+    # A position the agent can resolve, and NOT the name itself.
+    assert "theme token #" in payload["error"]
+    assert token_key not in payload["error"], "the refusal echoed the name back"
+    # NOTHING STAGED and nothing stored, so no apply can reach it either.
+    assert store.records == {}
+    async with _client(monkeypatch) as client:
+        assert (await _apply(client)).status == 400
+
+
+async def test_an_ordinary_theme_token_still_stages(monkeypatch, store):
+    """The control: without it, a route refusing EVERY theme would pass above."""
+    body = _package_body()
+    body["theme"]["tokens"]["--surface"] = "oklch(0.98 0.01 250)"
+    async with _client(monkeypatch) as client:
+        resp = await _save_and_apply(client, body)
+        assert resp.status == 200, await resp.text()
+
+    stored = parse_package(store.get(_page_slug(store)).content)
+    assert "--surface" in stored["theme"]["tokens"]
+
+
 async def test_the_real_store_round_trips_a_valid_package(monkeypatch, tmp_path):
     """The positive control for the test above, through the real store.
 
@@ -708,12 +918,12 @@ async def test_the_real_store_round_trips_a_valid_package(monkeypatch, tmp_path)
     real = ArtifactStore(tmp_path / "artifacts")
     monkeypatch.setattr(routes, "_dashboard_artifact_store", lambda: real, raising=False)
     async with _client(monkeypatch) as client:
-        resp = await _save(client, _package_body())
+        resp = await _save_and_apply(client, _package_body())
         assert resp.status == 200, await resp.text()
         assert "saved" in await resp.json()
-        # A second save of the same layout, through the real store's own
+        # A second save and apply of the same layout, through the real store's own
         # fingerprint comparison rather than the stand-in's.
-        again = await _save(client, _package_body())
+        again = await _save_and_apply(client, _package_body())
         assert again.status == 200
         assert (await again.json())["saved"]["versioned"] is False
 
@@ -765,7 +975,7 @@ async def test_a_page_bound_to_another_crewmate_is_never_written_over(monkeypatc
     async with _client(monkeypatch) as client:
         mine = _package_body()
         mine["theme"]["tokens"]["--accent"] = "oklch(0.2 0.01 0)"
-        resp = await _save(client, mine)
+        resp = await _save_and_apply(client, mine)
         assert resp.status == 200
         assert "saved" in await resp.json()
 
@@ -785,10 +995,10 @@ async def test_the_caller_updates_only_the_page_its_own_binding_names(monkeypatc
     )
 
     async with _client(monkeypatch) as client:
-        assert (await _save(client, _package_body())).status == 200
+        assert (await _save_and_apply(client, _package_body())).status == 200
         changed = _package_body()
         changed["view"]["blocks"].append({"id": "extra", "type": "stat", "fields": ["open_prs"]})
-        resp = await _save(client, changed)
+        resp = await _save_and_apply(client, changed)
         assert resp.status == 200
         assert "saved" in await resp.json()
 
@@ -840,7 +1050,14 @@ def test_the_tool_sends_only_the_three_declarations(monkeypatch):
     def _post(path: str, payload: dict[str, Any], **_kw: Any) -> dict[str, Any]:
         sent["path"] = path
         sent["payload"] = payload
-        return {"saved": {"slug": "d-1", "version": 2, "versioned": True, "blocks": 2}}
+        return {
+            "staged": {
+                "fields": 2,
+                "blocks": 2,
+                "preview_url": "/api/members/fleet-crew/dashboard?preview=1",
+            },
+            "next": "show this preview_url to the person, ask, then call dashboard_apply",
+        }
 
     monkeypatch.setattr(mcp_panel, "_post", _post)
     body = _package_body()
@@ -848,7 +1065,11 @@ def test_the_tool_sends_only_the_three_declarations(monkeypatch):
     out = mcp_panel._call_tool_inner("dashboard_save", body)
     assert sent["path"] == "/api/agent-panel/dashboard/save"
     assert set(sent["payload"]) == {"model", "view", "theme"}
-    assert "version 2" in out
+    # STAGED, and the link to show. An agent told "saved" here would report a
+    # change nobody approved, which is the one thing this reply must not say.
+    assert "STAGED, not live" in out
+    assert "/api/members/fleet-crew/dashboard?preview=1" in out
+    assert "dashboard_apply" in out
 
 
 def test_the_tool_hands_back_a_refusal_whole(monkeypatch):

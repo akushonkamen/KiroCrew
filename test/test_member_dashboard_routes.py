@@ -940,3 +940,328 @@ class TestAStoredPageCannotBeEdited:
         assert edited.instance_version == 2
         assert edited.manifest["title"] == "Retitled"
         assert edited.html == PAGE, "a manifest edit moved the page"
+
+
+# --------------------------------------------------------------------------
+# the STAGED composed page: read back for a look, and nothing installed
+# --------------------------------------------------------------------------
+
+
+def _package(**over) -> dict:
+    """A package the store's own gate accepts, bound to this crewmate."""
+    package = {
+        "kind": "dashboard",
+        "bound_to": f"crewmate:{SLUG}",
+        "model": {
+            "types": {
+                "open_prs": {"type": "number", "source": {"agentic": True}, "label": "Open PRs"},
+                "headline": {"type": "text", "source": {"agentic": True}},
+            }
+        },
+        "view": {
+            "blocks": [
+                {"id": "lead", "type": "stat", "fields": ["open_prs"], "title": "Open"},
+                {"id": "note", "type": "list", "fields": ["headline"]},
+            ]
+        },
+        "theme": {"tokens": {"--accent": "oklch(0.7 0.15 150)"}},
+    }
+    package.update(over)
+    return package
+
+
+def _stage_package(package: dict | None = None) -> None:
+    """Stage a composed package for this crewmate, the way a save does."""
+    from kiro_crew.artifact_store.dashboard_package import canonical_package_content
+
+    instance.stage_package_preview(
+        SLUG, content=canonical_package_content(json.dumps(package or _package()))
+    )
+
+
+class TestTheStagedComposedPage:
+    """``dashboard_save`` stages, so the link it hands back has to read back.
+
+    What it reads back on THIS base is the declarations rather than a drawn page:
+    nothing here renders a package into a document yet. These cases pin the half
+    that exists -- the body, the gate, and that nothing was installed -- so the
+    display change that adds the drawing has a contract to fill.
+    """
+
+    async def test_a_staged_package_reads_back_through_the_preview_link(self) -> None:
+        _stage_package()
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 200, await resp.text()
+            body = await resp.json()
+        assert body["preview"] is True
+        assert body["fields"] == 2
+        assert body["blocks"] == 2
+        assert sorted(body["package"]["model"]["types"]) == ["headline", "open_prs"]
+        assert [b["id"] for b in body["package"]["view"]["blocks"]] == ["lead", "note"]
+
+    async def test_the_link_the_save_hands_back_is_the_one_this_route_answers(self) -> None:
+        """A reply pointing at a URL this route 404s would be worse than no reply."""
+        _stage_package()
+        assert instance.preview_url(SLUG) == f"/api/members/{SLUG}/dashboard?preview=1"
+        async with _client() as client:
+            assert (await client.get(_q("", preview=1))).status == 200
+
+    async def test_a_staged_package_reports_no_version_because_staging_wrote_none(self) -> None:
+        """A reader that saw a version move would believe the page was installed."""
+        _stage_package()
+        async with _client() as client:
+            body = await (await client.get(_q("", preview=1))).json()
+        assert body["instance_version"] == 0
+        assert instance.read(SLUG).instance_version == 0
+
+    async def test_staging_installs_nothing_the_ordinary_read_can_see(self) -> None:
+        """The gate's whole point: the page in force does not move on a save."""
+        _stage_package()
+        async with _client() as client:
+            body = await (await client.get(_q(""))).json()
+        assert "preview" not in body
+        assert body["state"] == instance.STATE_EMPTY
+        assert body["instance_version"] == 0
+
+    async def test_a_staged_package_bound_elsewhere_is_not_read_back_here(self) -> None:
+        """A package bound to another crewmate is not this one's to be shown.
+
+        The save route stamps the binding from the vetted caller, so this is the
+        older-staging-file case -- and a slot key and a member slug look alike,
+        which is what a looser check would miss.
+        """
+        _stage_package(_package(bound_to="crewmate:someone-else"))
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 404, await resp.text()
+            assert (await resp.json())["code"] == "no_preview"
+
+    async def test_a_staged_template_still_answers_its_own_preview(self) -> None:
+        """Both readers answer None for the other's payload, so one page comes back."""
+        instance.stage_preview(SLUG, template_id="fixture-board")
+        async with _client() as client:
+            body = await (await client.get(_q("", preview=1))).json()
+        assert body["preview"] is True
+        assert body["template"]["id"] == "fixture-board"
+        assert "manifest" in body
+
+    async def test_a_staged_package_replaces_a_staged_template(self) -> None:
+        """One page is offered at a time, so the person's yes names something."""
+        instance.stage_preview(SLUG, template_id="fixture-board")
+        _stage_package()
+        async with _client() as client:
+            body = await (await client.get(_q("", preview=1))).json()
+        assert body["package"]["bound_to"] == f"crewmate:{SLUG}"
+        assert "template" not in body
+        assert instance.staged_preview(SLUG) is None
+
+
+class TestWhatThePreviewRedactsAndWhatItKeeps:
+    """The two halves of the staged body's scrub, and why each one is what it is.
+
+    Prose is redacted. Structural NAMES are kept verbatim, because every one of
+    them is a join key -- the model names a field, a block references it, a theme
+    token is the CSS variable the style uses. A redactor that moved a key would not
+    hide anything (a declaration is a name, not a value) and would hand back a
+    package whose references do not resolve.
+    """
+
+    async def test_a_field_named_worker_session_key_survives_the_preview(self) -> None:
+        """The resolved-value redactor drops this key at any depth; declarations must not.
+
+        ``_page_safe`` removes ``worker_session_key`` wherever it appears, which is
+        right for a fold value and wrong for a declaration: the model loses the
+        field while the block that reads it keeps the reference, so the body
+        describes a package that cannot render -- and the ``fields`` count, taken
+        from the package itself, disagrees with what the body carries.
+        """
+        package = _package()
+        package["model"]["types"]["worker_session_key"] = {
+            "type": "text",
+            "source": {"agentic": True},
+        }
+        package["view"]["blocks"].append(
+            {"id": "owner", "type": "list", "fields": ["worker_session_key"]}
+        )
+        _stage_package(package)
+
+        async with _client() as client:
+            body = await (await client.get(_q("", preview=1))).json()
+
+        declared = body["package"]["model"]["types"]
+        assert "worker_session_key" in declared, "a valid declaration was redacted away"
+        # The reference and the declaration agree, which is the property that broke.
+        referenced = {f for b in body["package"]["view"]["blocks"] for f in b["fields"]}
+        assert referenced <= set(declared), "a block references a field the model lost"
+        assert body["fields"] == len(declared)
+
+    async def test_the_prose_around_the_names_is_still_redacted(self) -> None:
+        """The control: a credential pasted into a label must not reach the body.
+
+        Without this, leaving keys alone could be mistaken for leaving everything
+        alone, which is the opposite mistake.
+        """
+        from kiro_crew.platform import redact_via_context
+
+        token = "ghp_" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+        assert redact_via_context(token) != token, "not credential-shaped here"
+
+        package = _package()
+        package["model"]["types"]["open_prs"]["label"] = f"Open PRs {token}"
+        _stage_package(package)
+
+        async with _client() as client:
+            body = await (await client.get(_q("", preview=1))).json()
+
+        label = body["package"]["model"]["types"]["open_prs"]["label"]
+        assert token not in label, "a credential in a label reached the body"
+        assert "Open PRs" in label, "the whole label was dropped rather than scrubbed"
+
+
+class TestAStagedFileNobodyVettedIsStillRefused:
+    """The staged page is a FILE, so the save route is not its only writer.
+
+    ``members/<slug>/dashboard/preview.json`` is an ordinary file under the
+    crewmate's own directory. An agent can write one directly -- a plain file write
+    is something a prompt-injected agent can produce -- so the read cannot lean on
+    ``dashboard_save`` having refused anything. It asks for itself.
+    """
+
+    def _write_staged(self, package: dict) -> None:
+        """Stage by writing the file, bypassing the save route entirely."""
+        import time
+
+        from kiro_crew.dashboard_templates.instance import SCHEMA_VERSION, instance_dir
+
+        directory = instance_dir(SLUG)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "preview.json").write_text(
+            json.dumps(
+                {
+                    "schema": SCHEMA_VERSION,
+                    "slug": SLUG,
+                    "package_content": json.dumps(package),
+                    "staged_ms": int(time.time() * 1000),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    async def test_a_token_shaped_field_name_refuses_the_whole_read(self) -> None:
+        """Refused WHOLE, because a declared name cannot be masked on the way out.
+
+        The name is a join key: the model declares it and a block references it, so
+        a redactor rewriting it would hand back a package whose reference points at
+        nothing. There is no partial answer, which is why this is a 404 and not a
+        body with one key scrubbed.
+        """
+        from kiro_crew.platform import redact_via_context
+
+        token = "ghp_" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+        assert redact_via_context(token) != token, "not credential-shaped here"
+
+        package = _package()
+        package["model"]["types"][token] = {"type": "text", "source": {"agentic": True}}
+        self._write_staged(package)
+
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 404, await resp.text()
+            payload = await resp.json()
+        assert payload["code"] == "no_preview"
+        assert token not in json.dumps(payload), "the refusal echoed the name back"
+
+    async def test_a_token_shaped_theme_key_refuses_it_too(self) -> None:
+        """The set whose grammar admits a look-alike: a CSS custom property."""
+        from kiro_crew.platform import redact_via_context
+
+        token = "--xoxb-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+        assert redact_via_context(token) != token, "not credential-shaped here"
+
+        package = _package()
+        package["theme"]["tokens"][token] = "oklch(0.5 0.1 200)"
+        self._write_staged(package)
+
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 404, await resp.text()
+            assert token not in json.dumps(await resp.json())
+
+    async def test_an_ordinary_file_written_the_same_way_still_reads(self) -> None:
+        """The control. Without it, a route refusing EVERY staged file would pass above."""
+        self._write_staged(_package())
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 200, await resp.text()
+            assert (await resp.json())["preview"] is True
+
+
+class TestAStagedFileIsValidatedNotJustShapeChecked:
+    """The staged bytes go through the package validator, so only a package serves.
+
+    A name scan covers the three name sets it knows about. It cannot cover a key
+    nobody declared -- a credential-shaped key sitting beside a field's ``type``,
+    for instance -- and a shape check that asked only "is model a dict" would let
+    one straight through to the response. The validator's closed key set is what
+    answers that, and it answers the malformed cases in the same breath.
+    """
+
+    def _write_staged(self, content: str) -> None:
+        import time
+
+        from kiro_crew.dashboard_templates.instance import SCHEMA_VERSION, instance_dir
+
+        directory = instance_dir(SLUG)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "preview.json").write_text(
+            json.dumps(
+                {
+                    "schema": SCHEMA_VERSION,
+                    "slug": SLUG,
+                    "package_content": content,
+                    "staged_ms": int(time.time() * 1000),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    async def test_a_credential_shaped_metadata_key_never_reaches_the_body(self) -> None:
+        """An undeclared key beside a field's own keys, which no name scan looks at."""
+        from kiro_crew.platform import redact_via_context
+
+        token = "ghp_" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+        assert redact_via_context(token) != token, "not credential-shaped here"
+
+        package = _package()
+        package["model"]["types"]["open_prs"][token] = "anything"
+        self._write_staged(json.dumps(package))
+
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 404, await resp.text()
+            assert token not in json.dumps(await resp.json())
+
+    async def test_a_model_with_no_types_is_a_refusal_not_a_500(self) -> None:
+        """``model: {}`` must never reach a ``len(package["model"]["types"])``."""
+        package = _package()
+        package["model"] = {}
+        self._write_staged(json.dumps(package))
+
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 404, await resp.text()
+            assert (await resp.json())["code"] == "no_preview"
+
+    async def test_bytes_that_are_not_json_at_all_are_a_refusal(self) -> None:
+        self._write_staged("not json {")
+        async with _client() as client:
+            assert (await client.get(_q("", preview=1))).status == 404
+
+    async def test_a_valid_package_written_the_same_way_still_reads(self) -> None:
+        """The control, so the refusals above are the validator's and not the route's."""
+        self._write_staged(json.dumps(_package()))
+        async with _client() as client:
+            resp = await client.get(_q("", preview=1))
+            assert resp.status == 200, await resp.text()
+            assert (await resp.json())["fields"] == 2

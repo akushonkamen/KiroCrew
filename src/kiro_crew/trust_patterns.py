@@ -12,7 +12,8 @@ import fnmatch
 import glob
 import json
 import re
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
 ENV_ASSIGNMENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*=")
@@ -326,6 +327,36 @@ class GrantDeadline(NamedTuple):
     wall: float
     mono: float
 
+    def ended(self, *, wall: float, mono: float) -> bool:
+        """Return whether the deadline has passed at (``wall``, ``mono``)."""
+        return wall >= self.wall or mono >= self.mono
+
+
+# A deadline every reading of either clock has already passed.
+_ENDED = GrantDeadline(wall=float("-inf"), mono=float("-inf"))
+
+
+class GrantEnded(Exception):
+    """The timed grant an approval rested on ended before the approval was sent.
+
+    A transport raises it from ``approve_tool`` INSTEAD of answering: nothing
+    was sent and the request is still pending, so the caller asks the person.
+    """
+
+
+def grant_deadline_guard(deadline: GrantDeadline, request_id: str | int) -> Callable[[], None]:
+    """Return a check that raises :class:`GrantEnded` once ``deadline`` has passed.
+
+    A transport runs it under its write lock, right before it writes the
+    answer, so both clocks are read at the last moment before the answer leaves.
+    """
+
+    def _check() -> None:
+        if deadline.ended(wall=time.time(), mono=time.monotonic()):
+            raise GrantEnded(request_id)
+
+    return _check
+
 
 def grant_deadline(ttl: int, *, wall: float, mono: float) -> GrantDeadline:
     """Return the deadline of a grant made at (``wall``, ``mono``) for ``ttl`` seconds."""
@@ -366,8 +397,39 @@ def live_trusted_patterns(
     returned unchanged, and is returned itself when no timed grant is live.
     """
     for pattern, deadline in list(timed.items()):
-        if wall >= deadline.wall or mono >= deadline.mono:
+        if deadline.ended(wall=wall, mono=mono):
             del timed[pattern]
     if not timed:
         return patterns
     return patterns | timed.keys()
+
+
+def timed_grant_deadline(
+    command: str, patterns: set[str], timed: dict[str, GrantDeadline]
+) -> GrantDeadline | None:
+    """Return when the timed grants an approval of ``command`` rests on end.
+
+    ``None`` means the chat-long ``patterns`` cover every part of ``command``
+    on their own: the approval rests on no timed grant and carries no deadline.
+    Otherwise each part they leave uncovered takes the timed grant covering it
+    that ends last, and the result is the earliest of those on each clock, so
+    the approval stands only while every timed grant it needs is live. A part
+    nothing covers returns a deadline that has already passed: the caller
+    prompts rather than send an approval no grant backs.
+    """
+    split = split_command_segments(command)
+    if split is None:
+        return _ENDED
+    normalized, segments = split
+    parts = segments if len(segments) > 1 else [normalized]
+    needed: list[GrantDeadline] = []
+    for part in parts:
+        if any(_tool_matches(p, part) for p in patterns):
+            continue
+        covering = [d for p, d in timed.items() if _tool_matches(p, part)]
+        if not covering:
+            return _ENDED
+        needed.append(max(covering))
+    if not needed:
+        return None
+    return GrantDeadline(wall=min(d.wall for d in needed), mono=min(d.mono for d in needed))

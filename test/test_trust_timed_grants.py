@@ -27,6 +27,7 @@ from kiro_crew.trust_patterns import (
     live_trusted_patterns,
     parse_grant_ttl,
     record_trust_grant,
+    timed_grant_deadline,
 )
 
 
@@ -154,6 +155,42 @@ class TestGrantHelpers:
         first, second = _ChatSlot(key="a"), _ChatSlot(key="b")
         first._trusted_pattern_deadlines["ls"] = GrantDeadline(1.0, 1.0)
         assert second._trusted_pattern_deadlines == {}
+
+
+class TestTimedGrantDeadline:
+    """The deadline an approval carries is that of the timed grants it rests on."""
+
+    def test_chat_long_patterns_alone_give_no_deadline(self):
+        timed = {"ls*": GrantDeadline(100.0, 100.0)}
+        assert timed_grant_deadline("ls -la", {"ls*"}, timed) is None
+
+    def test_a_timed_grant_gives_its_own_deadline(self):
+        timed = {"ls*": GrantDeadline(100.0, 90.0)}
+        assert timed_grant_deadline("ls -la", set(), timed) == GrantDeadline(100.0, 90.0)
+
+    def test_only_the_parts_chat_long_patterns_leave_carry_a_deadline(self):
+        timed = {"ls*": GrantDeadline(100.0, 100.0), "cat*": GrantDeadline(5.0, 5.0)}
+        assert timed_grant_deadline("ls && cat x", {"cat*"}, timed) == GrantDeadline(100.0, 100.0)
+
+    def test_parts_on_different_timed_grants_end_at_the_earliest_on_each_clock(self):
+        timed = {"ls*": GrantDeadline(100.0, 20.0), "cat*": GrantDeadline(50.0, 80.0)}
+        assert timed_grant_deadline("ls && cat x", set(), timed) == GrantDeadline(50.0, 20.0)
+
+    def test_a_part_two_timed_grants_cover_takes_the_one_ending_last(self):
+        timed = {"ls*": GrantDeadline(100.0, 100.0), "ls -la": GrantDeadline(10.0, 10.0)}
+        assert timed_grant_deadline("ls -la", set(), timed) == GrantDeadline(100.0, 100.0)
+
+    @pytest.mark.parametrize("command", ["ls && rm x", "$(ls)"])
+    def test_a_command_no_grant_covers_gets_a_deadline_already_passed(self, command):
+        deadline = timed_grant_deadline(command, set(), {"ls*": GrantDeadline(100.0, 100.0)})
+        assert deadline is not None
+        assert deadline.ended(wall=-1e300, mono=-1e300)
+
+    def test_ended_on_either_clock(self):
+        deadline = GrantDeadline(10.0, 10.0)
+        assert not deadline.ended(wall=9.0, mono=9.0)
+        assert deadline.ended(wall=10.0, mono=0.0)
+        assert deadline.ended(wall=0.0, mono=10.0)
 
 
 class TestTimedGrantEndpoint:

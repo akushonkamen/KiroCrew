@@ -30,7 +30,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from chat_test_helpers import _make_ready_kiro_prerequisite
@@ -62,6 +62,21 @@ from kiro_crew.trust_patterns import (
 )
 
 # ── Shared helpers ────────────────────────────────────────────────────────
+
+
+def _write_recorder(order: list[str]):
+    """A transport ``_send_response`` that runs the caller's write check first.
+
+    It follows the framing contract: the check runs right before the frame is
+    written, and a raise means nothing was written.
+    """
+
+    def _write(_request_id, _result, *, before_write=None):
+        if before_write is not None:
+            before_write()
+        order.append("sent")
+
+    return _write
 
 
 def _slot(key: str = "chat-cov-1") -> _ChatSlot:
@@ -5269,8 +5284,27 @@ class TestRunChatAutoApproveRungs:
     async def test_live_timed_pattern_auto_approves_a_matching_command(self, tmp_path):
         state, client = _runner_state(tmp_path)
         slot = _slot()
+        deadline = GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        slot._trusted_pattern_deadlines = {"ls*": deadline}
+        _set_stream(
+            client,
+            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
+        )
+
+        await _drive(state, slot)
+
+        client.approve_tool.assert_awaited_once_with("req-cov-1", deadline=deadline)
+        assert set(slot._trusted_pattern_deadlines) == {"ls*"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("timed_pattern", ["git*", "ls*"])
+    async def test_chat_long_pattern_approval_carries_no_deadline(self, tmp_path, timed_pattern):
+        """The chat-long grant alone covers the call, so it is approved exactly as before."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {"ls*"}
         slot._trusted_pattern_deadlines = {
-            "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+            timed_pattern: GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
         }
         _set_stream(
             client,
@@ -5279,8 +5313,63 @@ class TestRunChatAutoApproveRungs:
 
         await _drive(state, slot)
 
-        client.approve_tool.assert_awaited_once_with("req-cov-1")
-        assert set(slot._trusted_pattern_deadlines) == {"ls*"}
+        assert client.approve_tool.await_args_list == [call("req-cov-1")]
+
+    @pytest.mark.asyncio
+    async def test_timed_grant_ending_before_the_send_prompts_and_sends_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """Approved while the grant was live, the answer would land after its deadline: ask."""
+        from kiro_crew import permission_floor, trust_patterns
+        from kiro_crew.acp.client import AcpClient
+
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_pattern_deadlines = {
+            "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        }
+        event = _permission(tool_input=json.dumps({"command": "ls -la"}))
+        # The real transport answers the runner, and its floor check lasts an
+        # hour on the clocks the deadline check reads: a host suspended mid-check.
+        order: list[str] = []
+        transport = AcpClient(work_dir=tmp_path)
+        transport._send_response = AsyncMock(side_effect=_write_recorder(order))
+        transport._permission_gate_events[event.request_id] = event
+        client.approve_tool.side_effect = transport.approve_tool
+
+        class _Clock:
+            offset = 0.0
+
+            def time(self):
+                return time.time() + self.offset
+
+            def monotonic(self):
+                return time.monotonic() + self.offset
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        clock = _Clock()
+
+        def _hour_long_floor(_event):
+            clock.offset += 3600
+            return None
+
+        monkeypatch.setattr(permission_floor, "refusal_for", _hour_long_floor)
+        monkeypatch.setattr(trust_patterns, "time", clock)
+
+        def _allow_once_when_registered():
+            future = slot._approval_futures.get("req-cov-1")
+            if future is not None and not future.done():
+                order.append("prompted")
+                future.set_result("approved")
+
+        state.push_slots_update.side_effect = _allow_once_when_registered
+        _set_stream(client, [event, _complete()])
+
+        await _drive(state, slot)
+
+        assert order == ["prompted", "sent"]
 
     @pytest.mark.asyncio
     async def test_expired_timed_pattern_is_dropped_before_matching(self, tmp_path):
@@ -5329,13 +5418,25 @@ class TestRunChatAutoApproveRungs:
         assert slot._trusted_pattern_deadlines == {}
 
     @pytest.mark.asyncio
-    async def test_timed_grant_expiring_during_the_program_check_prompts(self, tmp_path):
-        """The approval rests on a grant that is live after the awaited check, not before it."""
+    async def test_timed_grant_expiring_during_the_program_check_prompts(
+        self, tmp_path, monkeypatch
+    ):
+        """A grant that ends during the awaited check is not answered: the call prompts."""
+        from kiro_crew import permission_floor
+        from kiro_crew.acp.client import AcpClient
+
         state, client = _runner_state(tmp_path)
         slot = _slot()
         slot._trusted_pattern_deadlines = {
             "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
         }
+        event = _permission(tool_input=json.dumps({"command": "ls -la"}))
+        order: list[str] = []
+        transport = AcpClient(work_dir=tmp_path)
+        transport._send_response = AsyncMock(side_effect=_write_recorder(order))
+        transport._permission_gate_events[event.request_id] = event
+        client.approve_tool.side_effect = transport.approve_tool
+        monkeypatch.setattr(permission_floor, "refusal_for", lambda _event: None)
 
         async def _expire_while_checking(_command):
             # The executor hop lasts past the deadline (a slow pool, a host
@@ -5343,19 +5444,14 @@ class TestRunChatAutoApproveRungs:
             slot._trusted_pattern_deadlines["ls*"] = GrantDeadline(wall=0.0, mono=0.0)
             return None
 
-        prompted: list[bool] = []
-
         def _allow_once_when_registered():
             future = slot._approval_futures.get("req-cov-1")
             if future is not None and not future.done():
-                prompted.append(True)
+                order.append("prompted")
                 future.set_result("approved")
 
         state.push_slots_update.side_effect = _allow_once_when_registered
-        _set_stream(
-            client,
-            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
-        )
+        _set_stream(client, [event, _complete()])
 
         with patch.object(
             chat_runner,
@@ -5364,8 +5460,10 @@ class TestRunChatAutoApproveRungs:
         ):
             await _drive(state, slot)
 
-        assert prompted == [True]
-        assert slot._trusted_pattern_deadlines == {}
+        assert order == ["prompted", "sent"]
+        assert client.approve_tool.await_args_list[0] == call(
+            "req-cov-1", deadline=GrantDeadline(wall=0.0, mono=0.0)
+        )
 
 
 class TestRunChatApprovalWindow:

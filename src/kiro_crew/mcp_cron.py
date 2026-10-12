@@ -2888,17 +2888,23 @@ def _authz_session_key() -> str:
 
 
 def _authz_member_id(session_key: str) -> str:
-    """The crew member a vouched session key names by its own structure, or ``""``.
+    """The crew member a session key names by its own structure, or ``""``.
 
-    A member's pinned DM thread is keyed ``member-<slug>`` (under the
+    Applied to two kinds of key, matched against each other by the member arm of
+    the cron ownership gate (:func:`_owned_by`, ``_check_cron_job_ownership``):
+    the caller's vouched key, and a stored row's recorded owner key. A member's
+    pinned DM thread is keyed ``member-<slug>`` (under the
     ``dashboard_``/``dashboard:`` layer prefixes), and the slug IS the member id.
-    Reading the member off the KEY keeps this a strict-resolution citizen: the key
-    arrives from :func:`_authz_session_key`, which the gateway authors, so the
-    derivation adds no source an agent could write. It is the same derivation
-    :func:`kiro_crew.execution_context.revouch_at_verified_admission` trusts at
-    gate-verified admission, and it never consults a session record -- the record
-    is what the subject session writes, so deciding ownership from it would hand
-    the subject the answer to a question about itself.
+    Reading the member off the KEY keeps this a strict-resolution citizen: the
+    caller key arrives from :func:`_authz_session_key`, which the gateway
+    authors, so the derivation adds no source an agent could write. It is the
+    same derivation :func:`kiro_crew.execution_context.revouch_at_verified_admission`
+    trusts at gate-verified admission, and it never consults a session record --
+    the record is what the subject session writes, so deciding ownership from it
+    would hand the subject the answer to a question about itself. Nor does it
+    read ``job.member_id``, the execution member ``cron_add`` lets the caller
+    choose: a field any caller may fill names who a job runs as, never who owns
+    it.
 
     Every other spelling -- an ordinary ``chat-`` slot, a channel or Slack key, a
     ``cron:`` run key -- names no member and answers ``""``.
@@ -3141,14 +3147,16 @@ def _check_cron_job_ownership(svc: "CronService", job_id: str) -> str | None:
     if job.session_key == _UNOWNED:
         return _unowned_row_refusal(job_id)
     if job.session_key != session_key:
-        # A row that carries a crew-member binding belongs to that member, not to
-        # the one session whose key it also records: the member's schedule is
-        # manageable from any session the member's vouched key names, on the same
-        # terms :func:`_owned_by` grants the read. The member is matched from the
-        # caller key's own structure only; a binding names no authority for a
-        # caller the key does not vouch as that member.
+        # A row whose own session key names the same member the caller's key
+        # names belongs to that member, not to the one session whose key it also
+        # records: the member's schedule is manageable from any session the
+        # member's vouched key names, on the same terms :func:`_owned_by` grants
+        # the read. Both members are read off KEY structure only
+        # (:func:`_authz_member_id`) -- never off ``job.member_id``, the
+        # execution member ``cron_add`` lets the caller choose, which names who a
+        # job runs as and so is no evidence of who owns it.
         member_id = _authz_member_id(session_key)
-        if not (member_id and job.member_id == member_id):
+        if not (member_id and _authz_member_id(job.session_key) == member_id):
             try:
                 sel().log_tool_invocation(
                     session_key=session_key,
@@ -3327,15 +3335,18 @@ def _owned_by(jobs: list[CronJob], session_key: str) -> list[CronJob]:
 
     - the row's ``session_key`` equals the caller's key -- the row this exact
       session created; or
-    - the row carries a crew-member binding (``member_id``, recorded by
-      ``bind_cron_memory`` from the creating member session's execution) and the
-      caller's key names that member. A member is one principal across all the
-      keys its pinned DM thread presents, so the member's later sessions manage
-      the member's own schedule; the member is read off the vouched key's own
-      structure (:func:`_authz_member_id`), never off a session record.
+    - the row's own ``session_key`` names the same crew member the caller's key
+      names. A member is one principal across all the keys its pinned DM thread
+      presents, so the member's later sessions manage the schedule a member
+      session created. The member is read off KEY structure on both sides
+      (:func:`_authz_member_id`) -- the caller key the gateway vouches, and the
+      row's recorded owner key -- never off ``job.member_id``: that field is the
+      execution member ``cron_add`` lets the CALLER choose (``bind_cron_memory``
+      persists the pick beside the creator's session), so it records who a job
+      runs as, and a field any caller may fill is no evidence of who owns a row.
 
-    Ownerless rows take part in neither arm: the member arm requires a session
-    owner to widen through, so a row with no session stays outside every scope
+    Ownerless rows take part in neither arm: the member arm widens through the
+    row's recorded owner key, so a row with no session stays outside every scope
     (see :data:`_UNOWNED`) even when it names a member it runs as.
 
     An empty *session_key* returns nothing rather than every ownerless row, which
@@ -3351,7 +3362,8 @@ def _owned_by(jobs: list[CronJob], session_key: str) -> list[CronJob]:
     return [
         j
         for j in jobs
-        if j.session_key == session_key or (j.member_id == member_id and j.session_key)
+        if j.session_key == session_key
+        or (j.session_key and _authz_member_id(j.session_key) == member_id)
     ]
 
 

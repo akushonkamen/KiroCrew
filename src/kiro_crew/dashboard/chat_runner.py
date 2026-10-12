@@ -623,6 +623,7 @@ from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
 from kiro_crew.trust_patterns import extract_base_command as _extract_base_command
 from kiro_crew.trust_patterns import extract_bash_command as _extract_bash_command
 from kiro_crew.trust_patterns import extract_full_command as _extract_full_command
+from kiro_crew.trust_patterns import live_trusted_patterns as _live_trusted_patterns
 from kiro_crew.trust_patterns import matches_trusted_pattern as _matches_trusted_pattern
 from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
     split_command_segments as _split_command_segments,
@@ -14169,11 +14170,24 @@ async def _run_chat(
                 # rule is AcpEvent.child_unconditional_grant_eligible — the same
                 # boolean the unconditional grants below read — bound once above
                 # as _child_grant_eligible, so it cannot drift here.
-                if (
-                    slot._trusted_patterns
-                    and _child_grant_eligible
-                    and not event.tool_input_redacted
-                ):
+                #
+                # Timed grants are checked HERE, at decision time, rather than
+                # by a timer: a grant past its deadline is dropped before the
+                # match, so it can never approve the call in front of it. They
+                # live in their own store, so the set below is the chat-long
+                # patterns plus whichever timed ones are still live.
+                _tp_deadlines = getattr(slot, "_trusted_pattern_deadlines", None)
+                _tp_live = (
+                    _live_trusted_patterns(
+                        slot._trusted_patterns,
+                        _tp_deadlines,
+                        wall=time.time(),
+                        mono=time.monotonic(),
+                    )
+                    if _tp_deadlines
+                    else slot._trusted_patterns
+                )
+                if _tp_live and _child_grant_eligible and not event.tool_input_redacted:
                     _tp_command = approval_command(
                         event.tool_input or "",
                         is_shell=event.is_shell,
@@ -14182,9 +14196,7 @@ async def _run_chat(
                         raw_tool_params=event.raw_tool_params,
                     )
                     matched = (
-                        _matches_trusted_pattern(_tp_command, slot._trusted_patterns)
-                        if _tp_command
-                        else None
+                        _matches_trusted_pattern(_tp_command, _tp_live) if _tp_command else None
                     )
                     if matched and event.is_shell and _tp_command:
                         # The user granted a PROGRAM NAME. Do not honour it when
@@ -14221,6 +14233,23 @@ async def _run_chat(
                                 "msg msg-info",
                             )
                             matched = None
+                    if matched and _tp_deadlines is not None:
+                        # The program-name check above awaits an executor hop,
+                        # long enough for a timed grant to pass its deadline
+                        # (a slow pool, a host suspended mid-call). Re-derive
+                        # the live set and match again, with no await between
+                        # this and the approval below, so the approval rests on
+                        # a grant that is live now; with none left the call
+                        # falls through to the normal prompt.
+                        _tp_live = _live_trusted_patterns(
+                            slot._trusted_patterns,
+                            _tp_deadlines,
+                            wall=time.time(),
+                            mono=time.monotonic(),
+                        )
+                        matched = (
+                            _matches_trusted_pattern(_tp_command, _tp_live) if _tp_live else None
+                        )
                     if matched:
                         try:
                             validated_tool = _validate_tool_name(

@@ -243,7 +243,13 @@ def _url_payload_command(n: int) -> str:
 #: deny-exception check both passes of ``is_denied`` share, which reads a deny
 #: exception through kiro-cli's one ``Running: `` title prefix so a shell title
 #: earns exactly its command's carve-out. No glob, verb or eligibility test moved.
-_PACKAGE_LINE_BUDGET = 28_844
+#:
+#: Raised again, from 28,844, for one write-protected TARGET in ``paths.py``: the microvm
+#: lane's crew records, whose rows carry the VM id ``teardown`` hands to
+#: ``launcher.terminate``. Ten lines, of which four are the comprehension and six the
+#: reason every entry in that list carries. No matching rule, no threshold and no pass
+#: moved -- a target was added to a list the gate already walks.
+_PACKAGE_LINE_BUDGET = 28_854
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

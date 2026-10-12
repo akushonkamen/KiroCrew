@@ -166,8 +166,11 @@ class MicroVm:
         from a list response -- and a reader that required an endpoint would refuse
         every page.
 
-        That is not a loss, because the one caller of the list is the sweeper and
-        it reads the id, the state and the start time. Separate from
+        That is not a loss, because what wants the list is an account-wide orphan
+        sweep -- a VM running that no record names -- and it reads the id, the
+        state and the start time. This lane does not run one yet: the wall sweep
+        it does run works from the records, so it needs no list at all. Separate
+        from
         :meth:`from_response` rather than merged into a lenient single reader: a
         single reader that accepted a missing endpoint everywhere would also accept
         a ``GetMicrovm`` answer without one, and the lane's whole reachability
@@ -377,9 +380,11 @@ def list_microvms(
 ) -> list[MicroVm]:
     """Every MicroVM the caller can see, following ``nextToken`` to the end.
 
-    The sweeper reads this, and a sweep that stopped at the first page would
-    report the VMs it did not look at as absent -- which on the orphan side means
-    reporting a leaking VM as reaped.
+    For an account-wide orphan sweep -- a VM running that no record names -- which
+    this lane does not run yet; its wall sweep works from the records instead. The
+    pagination is here rather than left for then because a sweep that stopped at
+    the first page would report the VMs it did not look at as absent, which on the
+    orphan side means reporting a leaking VM as reaped.
     """
     out: list[MicroVm] = []
     next_token = ""
@@ -388,9 +393,9 @@ def list_microvms(
         # says ``{'min': 1, 'max': 50}``. 100 is refused outright:
         #   ValidationException: Value '100' at 'maxResults' failed to satisfy
         #   constraint: Member must have value less than or equal to 50
-        # so the call never returned a page. This is the SWEEPER's only input, and
-        # a sweeper that cannot list is a sweeper that reports every leaking VM as
-        # absent -- which is why it was failing closed on an unreadable list
+        # so the call never returned a page. This list is an ORPHAN sweep's only
+        # input, and a sweep that cannot list is one that reports every leaking VM
+        # as absent -- which is why it was failing closed on an unreadable list
         # rather than reporting zero orphans. Measured against the real service.
         args = ["--max-results", str(MAX_LIST_RESULTS)]
         if next_token:
@@ -507,18 +512,23 @@ def microvm_status(
             microvm_id, profile=profile, region=region, endpoint_url=endpoint_url
         ).state
     except AWSError as exc:
-        if _is_not_found(exc):
+        if is_not_found(exc):
             return None
         raise
 
 
-def _is_not_found(exc: Exception) -> bool:
+def is_not_found(exc: Exception) -> bool:
     """Whether *exc* is the service saying the resource is gone.
 
     Matched on the error NAME in the message rather than on an HTTP status,
     because the CLI seam hands back stderr text and not a response object. The
     name is the service's own ``ResourceNotFoundException``, which the model
     declares for every operation this module calls.
+
+    Public rather than private to this module: ``engine.teardown`` reads it to
+    tell a terminate the platform refused from one answering about a VM it has
+    already taken, and those two outcomes need opposite handling -- the first
+    stops the teardown, the second is what the teardown was for.
     """
     return "ResourceNotFoundException" in str(exc)
 
@@ -534,8 +544,9 @@ def describe_activation_registrations(
     """One SSM hybrid activation, or ``None`` when it is gone.
 
     Lives here rather than in a second SSM module because the only reason this
-    lane touches activations is to launch and reap MicroVMs, and the sweeper reads
-    ``RegistrationsCount`` from it to tell a leaked activation from a used one.
+    lane touches activations is to launch and reap MicroVMs. ``RegistrationsCount``
+    is what tells a leaked activation from a used one, which is the question an
+    account-wide orphan sweep asks; this lane does not run one yet.
     """
     data = checked_json(
         [
@@ -776,7 +787,7 @@ def get_microvm_image(
             timeout=timeout,
         )
     except AWSError as exc:
-        if _is_not_found(exc):
+        if is_not_found(exc):
             return None
         raise
     return MicroVmImage.from_response(data)
@@ -856,7 +867,7 @@ def image_version_status(
             timeout=timeout,
         )
     except AWSError as exc:
-        if _is_not_found(exc):
+        if is_not_found(exc):
             return None
         raise
     return str(data.get("status", "")) if isinstance(data, dict) else None
@@ -1007,8 +1018,9 @@ def delete_secret(
     wrong tag unrecoverable.
 
     Never raises. This runs on a teardown path, and a secret that outlives its
-    crew is a tidy-up item the sweeper can report, while an exception here would
-    abandon the rest of the teardown.
+    crew sits in its own recovery window and is logged, while an exception here
+    would abandon the rest of the teardown -- which is the VM, the node and the
+    activation.
     """
     try:
         checked_json(

@@ -516,8 +516,8 @@ class TestMicrovmStatus:
     def test_a_not_found_is_matched_on_the_error_name(self):
         from kiro_crew.cloud.aws import AWSError
 
-        assert api._is_not_found(AWSError("ResourceNotFoundException")) is True
-        assert api._is_not_found(AWSError("ValidationException")) is False
+        assert api.is_not_found(AWSError("ResourceNotFoundException")) is True
+        assert api.is_not_found(AWSError("ValidationException")) is False
 
 
 class TestDescribeActivationRegistrations:

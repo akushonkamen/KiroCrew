@@ -21,7 +21,10 @@ turn needs both and neither is recoverable from anything else the gateway holds:
 the reference names a secret the launch minted, and the name is the bundle's, not
 the launch tag's. ``wall_at`` is kept because the platform's maximum lifetime is
 not adjustable and not extendable, so the owner has to be able to see when this
-crew's VM will be taken.
+crew's VM will be taken -- and because it is the only thing that lets a later
+process act on an expiry nobody was watching for: the deadline is in the row, so
+``MicroVmLaunchEngine.reap`` can release the VM, the node, the activation and the
+secret a passed wall left behind.
 """
 
 from __future__ import annotations
@@ -47,13 +50,14 @@ _FILENAME = "microvm_crews.json"
 #: Ceiling on the whole file, checked BEFORE it is parsed, for the reason
 #: ``cloud/config.py`` gives for its own: ``json.loads`` builds the document in
 #: memory, so a bound applied to the parsed result runs after the damage. This
-#: store is read on every lifecycle tick, so an oversized file is a repeated cost
-#: and not a one-off.
+#: store is read by every launch, every teardown, every wall sweep and every
+#: request that lists crews, so an oversized file is a repeated cost and not a
+#: one-off.
 _MAX_FILE_BYTES = 1 << 21
 
 #: Ceiling on how many crews one install may track. Reached only by a leak: the
 #: regional memory quota stops a real fleet long before this, and the cap exists
-#: so a runaway writer cannot grow an unbounded document the tick then re-reads.
+#: so a runaway writer cannot grow an unbounded document every reader re-reads.
 _MAX_RECORDS = 256
 
 #: Ceiling on any one string read back from the file.
@@ -90,6 +94,11 @@ class CrewRecord:
     #: every backup of the owner's config directory.
     control_secret_ref: str = ""
     #: Epoch seconds. When the platform will terminate the VM whatever its state.
+    #:
+    #: Written when ``RunMicrovm`` answers, because that is when the VM exists and
+    #: its clock starts. ZERO means never recorded, and is NOT a deadline in the
+    #: past: reading it as one would release every crew whose row was written
+    #: before this field was, so :meth:`MicroVmLaunchEngine.reap` skips it.
     wall_at: float = 0.0
     #: The lifetime this VM was launched with, in seconds, as asked for.
     wall_seconds: int = 0
@@ -244,7 +253,7 @@ class CrewStore:
         """Replace the file with *records*, atomically.
 
         Refuses to write more than :data:`_MAX_RECORDS`, so a leak cannot grow a
-        document the tick then re-reads on every pass.
+        document every later read has to parse in full.
         """
         if len(records) > _MAX_RECORDS:
             raise ValueError(
@@ -299,8 +308,27 @@ class CrewStore:
             ) from exc
         if document is None:
             return {}
+        # Shape first, THEN the key. ``document.get`` on a list or a number raises
+        # ``AttributeError``, which is not this module's error and reaches the caller
+        # as a crash rather than the refusal the next branch is written to give.
+        if not isinstance(document, dict):
+            raise CrewStoreUnreadable(
+                f"the microvm crew store {self._path} is not the shape this lane writes, so a "
+                "write would discard whatever it does hold"
+            )
+        if not document:
+            # The PRE-CREATED store, and the one empty object that is not a
+            # malformed one. ``mount(2)`` cannot seal a name nothing occupies, so
+            # this leaf is on the sandbox's pre-create list and the pre-create
+            # writes ``{}`` -- which makes ``{}`` the shape the FIRST launch on a
+            # sealed install finds. Refusing it here would turn the state the seal
+            # itself creates into the one state a launch cannot start from. The
+            # tolerant read already answers "no crews" for it; that list requires
+            # an empty document to mean what an absent one means for BOTH readers,
+            # and this is the write half of it.
+            return {}
         entries = document.get("crews")
-        if not isinstance(document, dict) or not isinstance(entries, list):
+        if not isinstance(entries, list):
             raise CrewStoreUnreadable(
                 f"the microvm crew store {self._path} is not the shape this lane writes, so a "
                 "write would discard whatever it does hold"
@@ -327,9 +355,11 @@ class CrewStore:
         :meth:`publish` replaces the whole document, so a write is only safe if
         the read it was computed from is still current when it lands. Without
         this lock it is not: the lane has TWO writers by design -- the gateway
-        serving the owner's clicks, and the separately scheduled ``tick`` cron in
-        its own interpreter -- and an atomic rename makes each write indivisible
-        without making the pair of them ordered. Two concurrent passes both read
+        serving the owner's clicks, and a ``kirocrew cloud`` launch or teardown
+        running from a terminal in its own interpreter, which also sweeps every
+        other crew's wall as it goes -- and an atomic rename makes each write
+        indivisible without making the pair of them ordered. Two concurrent
+        passes both read
         the same document, each adds its own change, and the second rename
         discards the first. What it discards is a crew's row, and with it the
         secret reference and crew name a turn to it needs: the VM keeps running
@@ -344,8 +374,9 @@ class CrewStore:
 
         A lock that cannot be taken RAISES, which is what ``file_lock`` already
         does and is the right direction here: every caller of a write is a
-        provisioning step or a tick that reports its own failure, so a refusal
-        costs one pass and an unserialised write costs a crew.
+        provisioning step, a teardown or a wall sweep, each of which reports its
+        own failure, so a refusal costs one pass and an unserialised write costs
+        a crew.
         """
         lock_path = self._path.with_name(self._path.name + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)

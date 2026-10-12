@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from kiro_crew.cloud.microvm.image import Recipe
+from kiro_crew.cloud.microvm.image import Recipe, default_build_digest
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +201,14 @@ def base_recipe_digest(wheel: Path) -> str:
     What it does NOT give up is the pinning the base recipe does itself: every
     ``FROM``, kiro-cli, the AWS CLI and gh stay pinned by digest inside that file.
 
-    Names are hashed with the bytes so moving a file is a different digest, and
-    the walk is sorted so two machines agree.
+    Each file is hashed under its path RELATIVE TO ITS ROOT, not under its bare
+    name, and the difference is load-bearing twice over. ``container/`` is a
+    package tree: it holds ``microvm/hooks.py``, ``front/app.py`` and several
+    ``__init__.py``, so a bare name neither locates a file nor distinguishes two
+    that share it -- and moving one between packages left the digest unchanged
+    while changing the image. The relative path is what makes the claim in this
+    sentence true. The walk is sorted so two machines agree, and the separators
+    are the posix ones so Windows and Linux agree too.
     """
     digest = hashlib.sha256()
     roots = [
@@ -220,7 +226,12 @@ def base_recipe_digest(wheel: Path) -> str:
             else sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
         )
         for path in files:
-            digest.update(path.name.encode("utf-8"))
+            # Relative to the root's PARENT, so a single-file root hashes as its
+            # own name and a directory root hashes as ``<dir>/<path inside it>``.
+            # The wheel's name carries its version, which is why that one stays
+            # part of the digest rather than being reduced to a fixed label.
+            label = path.relative_to(root.parent).as_posix()
+            digest.update(label.encode("utf-8"))
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
@@ -409,6 +420,8 @@ def assemble(
     wheel: Path,
     base_image_arn: str,
     out_zip: Path,
+    account_id: str = "",
+    region: str = "",
 ) -> AssembledRecipe:
     """Build the recipe zip for *bundle_dir*, and the :class:`Recipe` naming it.
 
@@ -427,6 +440,12 @@ def assemble(
     The digests are computed before anything is written, so a caller can ask what
     the image WOULD be identified as without paying for an upload -- which is what
     lets the cache be consulted before a zip is assembled at all.
+
+    *account_id* and *region* are the account and region the guest's ``/run`` will
+    accept a payload for. They go in NOTHING this function writes -- they are baked
+    into the image's environment by ``CreateMicrovmImage``, not carried in the zip --
+    and they are taken here only so the recipe's own digest covers them. Both
+    default to empty, which is an unpinned image; a launch always supplies them.
     """
     check_layout(bundle_dir)
     if not wheel.is_file():
@@ -462,6 +481,13 @@ def assemble(
         base_image_arn=base_image_arn,
         base_digest=base_digest,
         bundle_digest=bundle_digest_of(bundle_dir),
+        # The build settings are not in this zip and are sent beside it, so they
+        # are stamped on here: a recipe that did not carry them would be an image
+        # identity that ignores the guest environment, the memory floor, the
+        # architecture, the hook switches and the account and region the guest
+        # refuses a payload outside. ``ImageResolver`` refuses a recipe whose stamp
+        # is not the one it is about to send.
+        build_digest=default_build_digest(account_id=account_id, region=region),
     )
     dockerfile = assemble_dockerfile(base_digest)
     out_zip.parent.mkdir(parents=True, exist_ok=True)

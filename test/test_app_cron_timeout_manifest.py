@@ -38,6 +38,12 @@ NAME = f"{APP}/{SHORT}"
 
 
 def _manifest(cron: dict) -> AppManifest:
+    """A manifest declaring one cron, with the ``permissions.cron`` grant that requires.
+
+    Validation refuses ``crons`` without the grant, so every manifest here carries
+    it: the subject under test is the ``timeout``/``timeout_secs`` pair, and an
+    unrelated missing-grant error would mask it.
+    """
     return AppManifest.from_dict(
         {
             "name": APP,
@@ -45,6 +51,7 @@ def _manifest(cron: dict) -> AppManifest:
             "displayName": "Test App",
             "description": "x",
             "author": "t",
+            "permissions": {"cron": True},
             "crons": [cron],
         }
     )

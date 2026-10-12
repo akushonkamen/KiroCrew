@@ -57,7 +57,33 @@
     "send_refused": "此会话未接受这个回答。",
     "send_unknown": "尚无法确认是否送达。回答已保留，请先检查会话再重试，以免重复发送。",
     "updated": "最后检查于 {{time}}",
-    "panel_load_failed": "无法加载仪表板面板。请重新加载页面重试。"
+    "panel_load_failed": "无法加载仪表板面板。请重新加载页面重试。",
+    "state_needs_input": "需要输入",
+    "no_dashboard": "尚无发布视图。点击“打开会话”，然后让代理为此任务发布视图。",
+    "request_design": "创建发布视图",
+    "design_requested": "已请求创建发布视图，准备好后会显示在这里。",
+    "published_view": "发布视图",
+    "progress": "{{done}} / {{total}} 已验收或勾选完成",
+    "adaptive_title": "为当前任务创建发布视图",
+    "adaptive_description": "模型可以在这里发布适合任务的视图：时间线、任务板、依赖图或其他有用的视图。在此之前，实时活动和待处理请求仍然可见。",
+    "contained": "请通过上方的“提问”和“审批”回复。模型设计的页面不能批准操作。",
+    "model_designed": "模型设计 · 已发布视图",
+    "source_views": "代理发布到会话“仪表板”的视图",
+    "input_count": "需要你：{{countText}}",
+    "tile_progress": "进度",
+    "hide": "隐藏状态格",
+    "show": "显示状态格",
+    "open_panel": "打开仪表板",
+    "nothing_running": "没有正在运行的任务。",
+    "running_count": "{{countText}} 项运行中",
+    "running_title": "还没有任务列表——正在显示当前进行中的内容。",
+    "plan_runs_title": "进度统计的是计划；这个列表显示当前进行中的内容。",
+    "blocked_title": "等待智能体处理——卡住的运行或事项",
+    "attention_title": "等待你处理——提问和审批",
+    "badge_approval": "审批",
+    "badge_question": "提问",
+    "no_blocked": "没有受阻的任务。",
+    "more_in_panel": "仪表板中还有 {{countText}} 项"
   },
   "terminalTab": {
     "rename": "重命名",
@@ -5722,7 +5748,8 @@
       "retrying": "正在重试…",
       "roster_load_failed": "无法加载 Agent 列表。",
       "switch_agent": "切换代理",
-      "type_to_filter": "输入以筛选…"
+      "type_to_filter": "输入以筛选…",
+      "agent_id_tooltip": "{{name}} — 代理 ID。定时任务、spawn 参数和 CLI 使用此 ID，而不是标签。"
     },
     "agentSkillsEditor": {
       "add_skill": "添加技能",
@@ -7412,7 +7439,8 @@
       "stdio_or": "（stdio）或",
       "that_looks_like_a_single_server_spec_give_it_a_n": "这看起来是单个服务器配置 — 请为它命名：",
       "url": "url",
-      "will_add": "将添加"
+      "will_add": "将添加",
+      "stored_header_values_are_hidden_and_read_only": "已存储的 header 值在此处隐藏且只读。如需更改，请删除并重新添加该服务器——重新添加后服务器初始为禁用状态，且你的工具限制不会保留，请在重新添加后重新设置。"
     },
     "messageErrorBoundary": {
       "hide_raw": "隐藏原始内容",
@@ -9650,6 +9678,74 @@
       "turn_4_assistant": "已加到 **Unreleased** 下：\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\n也放进 PR 里吗？",
       "turn_4_user": "放。然后总结一下改了什么。",
       "turn_5_assistant": "已推送。简单说：token 刷新加了一次重试，登出路径补了回归测试，还有那条 CHANGELOG。三项都在 PR #12 里，并已关联 #7。"
+    },
+    "crew": {
+      "crewEditorNextDialog": {
+        "no_tools_match": "没有工具匹配“{{filter}}”。",
+        "no_skills_match": "没有技能匹配“{{filter}}”。",
+        "read_only": "只读",
+        "can_modify_run": "可修改 / 运行",
+        "runs_without_asking": "无需询问即运行",
+        "off": "关闭",
+        "managed": "受管",
+        "shared": "共享",
+        "server_id": "服务器 ID",
+        "transport": "传输方式",
+        "transport_http": "HTTP 传输",
+        "transport_stdio": "命令 (stdio) 传输",
+        "transport_http_value": "HTTP / SSE",
+        "transport_stdio_value": "命令 (stdio)",
+        "url": "URL",
+        "headers": "请求头",
+        "command": "命令",
+        "args": "参数",
+        "env": "环境变量",
+        "state": "状态",
+        "this_template_declares_no_mcp_servers": "此模板未声明任何 MCP 服务器。",
+        "servers": "服务器",
+        "all_managed_by_template": "全部由模板管理",
+        "skill_id": "技能 ID",
+        "owner": "所有者",
+        "shared_reference": "共享引用",
+        "shared_yes": "是 — 在队友间共享",
+        "shared_no": "否",
+        "this_template_declares_no_skills": "此模板未声明任何技能。",
+        "skills": "技能",
+        "all_from_template": "全部来自模板",
+        "model_frame": "此队友使用的模型。保持继承以沿用代理模板，或为此队友固定某个具体模型。",
+        "tools": "工具"
+      },
+      "toolMeta": {
+        "category_filesystem": "文件系统",
+        "category_execution": "执行",
+        "category_web": "网页",
+        "category_kirocrew": "{{productName}}",
+        "category_other": "其他",
+        "fs_read_label": "读取文件",
+        "fs_read_description": "读取文件并列出目录。",
+        "fs_write_label": "写入文件",
+        "fs_write_description": "在磁盘上创建和编辑文件。",
+        "glob_label": "查找文件",
+        "glob_description": "按名称模式查找文件。",
+        "grep_label": "在文件中搜索",
+        "grep_description": "用正则表达式搜索文件内容。",
+        "execute_bash_label": "运行 Shell 命令",
+        "execute_bash_description": "执行终端命令。",
+        "code_label": "代码智能",
+        "code_description": "浏览、分析并重构代码（LSP + AST）。",
+        "web_fetch_label": "获取网页",
+        "web_fetch_description": "从 URL 获取并提取内容。",
+        "web_search_label": "网页搜索",
+        "web_search_description": "在网上搜索信息。",
+        "introspect_label": "阅读应用文档",
+        "introspect_description": "查阅此应用的功能和命令。",
+        "session_label": "会话工具",
+        "session_description": "创建并驱动对等工作会话。",
+        "report_label": "报告",
+        "report_description": "向用户呈现结构化报告。",
+        "tool_search_label": "工具搜索",
+        "tool_search_description": "按需加载延迟的 MCP 工具规范。"
+      }
     }
   },
   "hooks": {
@@ -11587,7 +11683,14 @@
         "approval_hint": "批准只运行这一条命令。拒绝会跳过它；代理会在没有它的情况下继续。",
         "retry": "重试",
         "running_on_header": "在 {{name}} 上",
-        "approval_elsewhere": "{{name}} 上的代理正在等待一项此窗口无法回应的批准。请在该团队自己的控制台中回应。"
+        "approval_elsewhere": "{{name}} 上的代理正在等待一项此窗口无法回应的批准。请在该团队自己的控制台中回应。",
+        "rewind": "回退到这里",
+        "approval_title": "{{name}} 上的代理想要运行 {{tool}}",
+        "approve": "批准",
+        "reject": "拒绝",
+        "stop": "停止",
+        "regenerate": "重新生成",
+        "send": "发送"
       },
       "messageContextMenu": {
         "copy_link_text": "复制链接文本",
@@ -12052,7 +12155,10 @@
       "crew_enable_named": "启用 {{name}}",
       "crew_spaces_unavailable": "无法加载 {{name}} 的文件夹。其聊天将不分文件夹列出。",
       "crew_enable_failed": "无法启用 {{name}}",
-      "muted": "已静音：无提示音、通知或徽标"
+      "muted": "已静音：无提示音、通知或徽标",
+      "pick_a_model_for_every_session_switching_a_sessi": "为每个会话选择一个模型。切换会话会",
+      "resets_its_conversation": "重置其对话",
+      "new_ephemeral_chat": "新建无痕聊天"
     },
     "connectionsPage": {
       "action_failed": "操作失败：{{error}}",
@@ -12183,7 +12289,8 @@
       "turn_latest": "第 {{n}} 轮 · 最近一次",
       "turn_n": "第 {{n}} 轮",
       "turn_picker": "选择一轮",
-      "unit_chars": "字符"
+      "unit_chars": "字符",
+      "earlier_hidden_other": "更早的 {{count}} 轮未显示"
     },
     "crewBoard": {
       "title": "工作项",
@@ -12657,7 +12764,9 @@
         "decisions_runtime_error": "无法启动模型。",
         "decisions_runtime_retry": "重试",
         "dashboard": "动态仪表板",
-        "dashboard_desc": "开启仍在开发中的动态仪表板：聊天输入框上方显示状态行，侧边面板和队友页面提供仪表板视图，另有“全部仪表板”页面。布局仍在设计中，因此开启前不会显示。自动卡片开关也在这里。"
+        "dashboard_desc": "开启仍在开发中的动态仪表板：聊天输入框上方显示状态行，侧边面板和队友页面提供仪表板视图，另有“全部仪表板”页面。布局仍在设计中，因此开启前不会显示。自动卡片开关也在这里。",
+        "remote_instance_sessions": "远程 Crew 会话",
+        "merge_a_connected_remote_instances_live_sessions": "将已连接远程 Crew 的实时会话合并到会话列表中，每个会话都带有服务器标记。远程 Crew 指你连接的另一台机器，不是你的代理。功能可用，但尚未完成。"
       },
       "kiroSignInCard": {
         "title": "Kiro 登录",
@@ -15574,7 +15683,9 @@
         "turn_time_limit_description": "一轮聊天在被停止前最多可运行的时长。300 到 86,400 秒（24 小时）。默认 14,400 秒（4 小时）。",
         "turn_time_limit_hint": "达到此上限的一轮会被停止，已写入磁盘的工作会保留；恢复即可继续。对于完整测试套件等长时间无人值守的轮次，请调高此值。从下一轮开始生效。",
         "failed_to_save_compaction_wait_budget": "无法保存压缩等待时长",
-        "failed_to_save_turn_time_limit": "无法保存单轮时间上限"
+        "failed_to_save_turn_time_limit": "无法保存单轮时间上限",
+        "how_terse_the_agent_s_prose_is_ultra_concise_cap": "控制助手行文简洁程度。“极简”会让整个回复保持简短：先给结论，用要点而非成段文字，去掉铺垫。代码、命令和错误信息在任何级别下都保持原样；安全警告始终会给出但保持简短，多步骤说明保持完整。 “仅结论”更进一步，完全去掉解释：最多一句话，细节只在你主动询问时给出 —— 或者当决定足够重大（安全、信息暴露、数据丢失、花费，以及任何难以撤销的事）、你需要看到理由才能作出正确选择时给出。",
+        "ultra_concise_3_sentences": "极简 — 先给结论，尽量少用成段文字"
       },
       "computerUsePanel": {
         "accessibility": "辅助功能",
@@ -15630,7 +15741,8 @@
         "open_developer_page": "打开开发者页面",
         "run_a_local_gateway": "运行本地网关",
         "show_developer_page_in_sidebar_with_logs_system": "在侧边栏显示开发者页面，包含日志、系统指标与记忆内部信息",
-        "turn_it_off_only_when_a_gateway_already_answers": "在这台机器上启动网关。除非本应用的端口已经连到另一台机器上的 Crew，否则请保持开启；不然下次打开应用时（也就是此设置生效时）将无法连接。为此需要用 Connection 菜单中的“Set Remote Host…”为此端口保存该 Crew，并且要有隧道：在那里勾选“Keep an SSH tunnel to this crew open”（macOS 和 Linux），或自己保持 SSH 隧道运行。关闭此项后，设置 → 远程 Crew 中的连接会停止，所以不算数。"
+        "turn_it_off_only_when_a_gateway_already_answers": "在这台机器上启动网关。除非本应用的端口已经连到另一台机器上的 Crew，否则请保持开启；不然下次打开应用时（也就是此设置生效时）将无法连接。为此需要用 Connection 菜单中的“Set Remote Host…”为此端口保存该 Crew，并且要有隧道：在那里勾选“Keep an SSH tunnel to this crew open”（macOS 和 Linux），或自己保持 SSH 隧道运行。关闭此项后，设置 → 远程 Crew 中的连接会停止，所以不算数。",
+        "start_a_gateway_on_this_machine_turn_it_off_to_u": "在这台机器上启动网关。关闭后，{{productName}} 仅作为客户端使用，连接到你已配置的网关，而不在本机运行网关。将在下次打开应用时生效。"
       },
       "discordPanel": {
         "allowed_server_channel_ids": "允许的服务器频道 ID",
@@ -17732,7 +17844,16 @@
       "fresh_start_confirm_action": "重新开始",
       "fresh_start_failed_queued": "还有排队的消息。等它们完成后，再试一次重新开始。",
       "fresh_start_failed_busy": "队友还在工作，没有停下。先停止它，再试一次。",
-      "fresh_start_unsaved_fold": "它已经忘记这段对话，消息已折叠起来，但折叠时间没有保存。重新加载后，它们会再次展开。"
+      "fresh_start_unsaved_fold": "它已经忘记这段对话，消息已折叠起来，但折叠时间没有保存。重新加载后，它们会再次展开。",
+      "patrol_cycles_unlimited": "第 {{n}} 轮 · 无上限",
+      "patrol_cycles_of": "第 {{n}} 次，共 {{max}} 次",
+      "patrol_badge": "巡逻中 · {{cycle}}",
+      "meet_crewmates": "认识 CrewMates",
+      "meet_crewmates_hint": "一段引导式介绍，会为你创建第一个队友。",
+      "profile_model": "模型",
+      "profile_model_auto": "自动",
+      "dashboard_empty": "{{name}} 还没有发布仪表板。在这个对话里请它发布，发布的内容会显示在这里。",
+      "profile_permissions_sub": "它能做什么 · 在编辑器中设置"
     },
     "tasksCapacityCard": {
       "title": "任务与容量",
@@ -18320,5 +18441,80 @@
       "composer_approval_mode": "消息框控制栏中的审批模式选择器，用于设置工具调用是先询问（常规）、读取操作直接运行（读取）、信任本会话（信任），还是全部自动批准（YOLO）。",
       "composer_voice_input": "消息框中的麦克风按钮，按下即可用语音输入代替打字；在触摸屏上它会在键盘和按住说话之间切换。"
     }
+  },
+  "crewEditorNext": {
+    "editor_aria": "新建队友编辑器",
+    "section_general": "常规",
+    "section_built_from": "构建来源",
+    "section_behavior": "行为",
+    "section_memory": "记忆",
+    "section_danger": "危险区域",
+    "tab_details": "详情",
+    "tab_tools": "工具",
+    "tab_mcp": "MCP 服务器",
+    "tab_skills": "技能",
+    "tab_approvals": "审批",
+    "tab_model": "模型",
+    "tab_triggers": "触发器",
+    "tab_schedules": "定时任务",
+    "tab_webhooks": "Webhook",
+    "tab_profile": "档案",
+    "tab_recovery": "恢复",
+    "state_from_template": "来自模板",
+    "state_added": "在此队友上添加",
+    "state_removed": "在此队友上移除",
+    "state_added_short": "已添加",
+    "state_removed_short": "已移除",
+    "filter_tools": "筛选工具…",
+    "filter_tools_aria": "筛选工具",
+    "filter_skills": "筛选技能…",
+    "filter_skills_aria": "筛选技能",
+    "built_from_hint": "此队友从该模板继承其工具和技能。",
+    "workspace_hint_default": "“default” 是你主目录中共享的工作区文件夹，每个队友默认都用它——选择或新建另一个，可将此队友隔离到自己的文件夹。",
+    "workspace_hint_custom": "此队友读写的文件夹。切换后，新的会话将在新文件夹中重新开始；旧文件夹会保留。",
+    "read_only": "只读",
+    "built_from_headline": "构建来源",
+    "built_from_body": "此队友的工具、MCP 服务器和技能来自该模板——具体包含哪些请查看上方的标签页。这些是继承而来的，无法在此更改；在“代理”页面编辑模板，或在“常规”中将此队友切换到其他模板。",
+    "template_unavailable": "该模板目前未安装在此机器上，因此此队友回退到默认配置。安装或恢复 {{name}} 以恢复其全部能力。",
+    "template_authored": "这个模板是你编写的，你可以在“代理”页面直接编辑它。",
+    "triggers_frame": "触发器决定编排器何时为别人已发起的任务选中此队友——这是关于被选中，而非自行唤醒。",
+    "schedules_heading": "定时任务",
+    "schedules_blurb": "基于时钟的唤醒：此队友按计划自行开始一轮工作，无需人在场。与触发器不同——触发器是为别人的任务被选中；这里是自行行动。",
+    "webhooks_frame": "外部系统通过调用来唤醒此队友。令牌的签发和吊销仍在 Webhook 页面进行。",
+    "delete_crewmate": "删除队友",
+    "loading_template": "正在加载模板…",
+    "load_error": "无法加载该模板的能力。",
+    "stat_mcp_servers": "MCP 服务器",
+    "stat_model": "模型",
+    "memory_empty": "此队友还没有私有记忆库。",
+    "memory_profile_frame": "此队友在学习过程中记录的关于你和它工作的笔记——会带入每一次会话。你可以阅读和编辑它们；队友也会持续更新。",
+    "sections_aria": "队友设置分区",
+    "builtfrom_sections_aria": "构建来源分区",
+    "behavior_sections_aria": "行为分区",
+    "memory_sections_aria": "记忆分区",
+    "state_disabled_word": "已禁用"
+  },
+  "crewApprovalsEditor": {
+    "loading": "正在加载审批…",
+    "load_error": "无法加载此队友的审批。",
+    "agent_unavailable": "此队友所基于的代理不可用，因此无法编辑其审批。",
+    "intro": "选择 {{member}} 可以无需询问直接执行的操作。这是队友在其代理之上的自有层——添加新工具或技能属于代理本身。安全策略始终拥有最终决定权。",
+    "count": "已自动审批 {{on}}/{{total}}",
+    "unsaved": "有未保存的更改",
+    "empty": "此队友的代理没有可自动审批的内容。",
+    "section_tools": "工具",
+    "section_mcp": "MCP 服务器",
+    "unknown_server": "（未知服务器）",
+    "auto_approve_aria": "自动审批 {{label}}",
+    "expansion_warning": "其中一些授权会在模板之外扩大此队友可无人值守执行的范围。保存会请求这种扩展；安全策略仍会在运行时对其把关。",
+    "preview_failed": "无法预览该更改。请重试。",
+    "save_failed": "无法保存该更改。请重试。",
+    "discard": "放弃",
+    "btn_working": "处理中…",
+    "btn_save": "保存",
+    "btn_review": "审查更改",
+    "state_changed": "已更改",
+    "state_this_mate": "此队友",
+    "state_removed": "已移除"
   }
 }

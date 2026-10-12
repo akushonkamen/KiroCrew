@@ -57,7 +57,33 @@
     "send_refused": "このセッションは回答を受け付けませんでした。",
     "send_unknown": "送信結果が不明です。回答は保持されています。重複送信を避けるため、再試行前にセッションを確認してください。",
     "updated": "最終確認 {{time}}",
-    "panel_load_failed": "ダッシュボードパネルを読み込めませんでした。ページを再読み込みして再試行してください。"
+    "panel_load_failed": "ダッシュボードパネルを読み込めませんでした。ページを再読み込みして再試行してください。",
+    "state_needs_input": "入力待ち",
+    "no_dashboard": "公開ビューはまだありません。「セッションを開く」を選び、エージェントにこのタスクのビューの公開を依頼してください。",
+    "request_design": "公開ビューを作成",
+    "design_requested": "公開ビューをリクエストしました。準備ができるとここに表示されます。",
+    "published_view": "公開ビュー",
+    "progress": "{{done}} / {{total}} 検収済み・チェック済み",
+    "adaptive_title": "このタスクの公開ビューを作成",
+    "adaptive_description": "エージェントはタイムライン、ボード、依存関係図など、タスクに適したビューをここに公開できます。それまでもリアルタイムの活動とリクエストを確認できます。",
+    "contained": "上の「質問」と「承認」から対応してください。エージェントが作成したページは操作を承認できません。",
+    "model_designed": "エージェントのデザイン · 公開ビュー",
+    "source_views": "エージェントがセッションの「ダッシュボード」に公開したビュー",
+    "input_count": "対応が必要：{{countText}}",
+    "tile_progress": "進捗",
+    "hide": "ステータスタイルを隠す",
+    "show": "ステータスタイルを表示",
+    "open_panel": "ダッシュボードを開く",
+    "nothing_running": "実行中のものはありません。",
+    "running_count": "実行中 {{countText}} 件",
+    "running_title": "タスク一覧はまだありません。今進行中のものを表示しています。",
+    "plan_runs_title": "進捗は計画を数えています。この一覧は、今進行中のものを表示します。",
+    "blocked_title": "エージェント待ち。止まっている実行や項目",
+    "attention_title": "あなた待ち。質問と承認",
+    "badge_approval": "承認",
+    "badge_question": "質問",
+    "no_blocked": "ブロックされているものはありません。",
+    "more_in_panel": "ダッシュボードにさらに {{countText}} 件"
   },
   "terminalTab": {
     "rename": "名前を変更",
@@ -5692,7 +5718,8 @@
       "retrying": "再試行中…",
       "roster_load_failed": "エージェント一覧を読み込めませんでした。",
       "switch_agent": "エージェントを切り替え",
-      "type_to_filter": "フィルターするには入力…"
+      "type_to_filter": "フィルターするには入力…",
+      "agent_id_tooltip": "{{name}} — エージェントID。cron、spawnパラメータ、CLIはラベルではなくこのIDを使用します。"
     },
     "agentSkillsEditor": {
       "add_skill": "スキルを追加",
@@ -7412,7 +7439,8 @@
       "stdio_or": "（stdio）またはネットワーク",
       "that_looks_like_a_single_server_spec_give_it_a_n": "それは単一のサーバースペックのようです。名前を付けてください：",
       "url": "url",
-      "will_add": "追加されます"
+      "will_add": "追加されます",
+      "stored_header_values_are_hidden_and_read_only": "保存済みの header 値はここでは非表示かつ読み取り専用です。変更するにはサーバーを削除して再追加してください。再追加後は無効状態で始まり、ツール制限は引き継がれないため、再設定してください。"
     },
     "messageErrorBoundary": {
       "hide_raw": "未処理を非表示",
@@ -9650,6 +9678,74 @@
       "turn_4_assistant": "**Unreleased** の下に追加しました：\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\nPR にも含めますか？",
       "turn_4_user": "はい。それから変更点をまとめて。",
       "turn_5_assistant": "プッシュしました。要点：トークン更新のリトライを 1 回、サインアウト経路の回帰テスト、CHANGELOG の 1 行。3 つとも PR #12 に入り、#7 に紐づいています。"
+    },
+    "crew": {
+      "crewEditorNextDialog": {
+        "no_tools_match": "「{{filter}}」に一致するツールはありません。",
+        "no_skills_match": "「{{filter}}」に一致するスキルはありません。",
+        "read_only": "読み取り専用",
+        "can_modify_run": "変更 / 実行が可能",
+        "runs_without_asking": "確認なしで実行",
+        "off": "オフ",
+        "managed": "管理対象",
+        "shared": "共有",
+        "server_id": "サーバー ID",
+        "transport": "トランスポート",
+        "transport_http": "HTTP トランスポート",
+        "transport_stdio": "コマンド (stdio) トランスポート",
+        "transport_http_value": "HTTP / SSE",
+        "transport_stdio_value": "コマンド (stdio)",
+        "url": "URL",
+        "headers": "ヘッダー",
+        "command": "コマンド",
+        "args": "引数",
+        "env": "環境変数",
+        "state": "状態",
+        "this_template_declares_no_mcp_servers": "このテンプレートは MCP サーバーを宣言していません。",
+        "servers": "サーバー",
+        "all_managed_by_template": "すべてテンプレートが管理",
+        "skill_id": "スキル ID",
+        "owner": "所有者",
+        "shared_reference": "共有参照",
+        "shared_yes": "はい — クルーメイト間で共有",
+        "shared_no": "いいえ",
+        "this_template_declares_no_skills": "このテンプレートはスキルを宣言していません。",
+        "skills": "スキル",
+        "all_from_template": "すべてテンプレートから",
+        "model_frame": "このクルーメイトが使うモデル。エージェントテンプレートに従うには継承のままにし、またはこのクルーメイト用に特定のモデルを固定します。",
+        "tools": "ツール"
+      },
+      "toolMeta": {
+        "category_filesystem": "ファイルシステム",
+        "category_execution": "実行",
+        "category_web": "ウェブ",
+        "category_kirocrew": "{{productName}}",
+        "category_other": "その他",
+        "fs_read_label": "ファイルを読む",
+        "fs_read_description": "ファイルを読み、ディレクトリを一覧表示します。",
+        "fs_write_label": "ファイルを書く",
+        "fs_write_description": "ディスク上のファイルを作成・編集します。",
+        "glob_label": "ファイルを探す",
+        "glob_description": "名前のパターンでファイルを探します。",
+        "grep_label": "ファイル内を検索",
+        "grep_description": "正規表現でファイルの内容を検索します。",
+        "execute_bash_label": "シェルコマンドを実行",
+        "execute_bash_description": "ターミナルコマンドを実行します。",
+        "code_label": "コードインテリジェンス",
+        "code_description": "コードの移動・解析・リファクタリングを行います（LSP + AST）。",
+        "web_fetch_label": "ウェブページを取得",
+        "web_fetch_description": "URL からコンテンツを取得して抽出します。",
+        "web_search_label": "ウェブ検索",
+        "web_search_description": "ウェブで情報を検索します。",
+        "introspect_label": "アプリのドキュメントを読む",
+        "introspect_description": "このアプリの機能とコマンドを調べます。",
+        "session_label": "セッションツール",
+        "session_description": "ピアの作業セッションを作成・操作します。",
+        "report_label": "レポート",
+        "report_description": "構造化されたレポートをユーザーに表示します。",
+        "tool_search_label": "ツール検索",
+        "tool_search_description": "保留中の MCP ツール仕様を必要に応じて読み込みます。"
+      }
     }
   },
   "hooks": {
@@ -11587,7 +11683,14 @@
         "approval_hint": "承認するとこのコマンドだけが実行されます。拒否するとスキップされ、エージェントはそれなしで続行します。",
         "retry": "再試行",
         "running_on_header": "{{name}} 上",
-        "approval_elsewhere": "{{name}} のエージェントは、このウィンドウでは応答できない承認を待っています。クルー自身のダッシュボードで応答してください。"
+        "approval_elsewhere": "{{name}} のエージェントは、このウィンドウでは応答できない承認を待っています。クルー自身のダッシュボードで応答してください。",
+        "rewind": "ここまで巻き戻す",
+        "approval_title": "{{name}} のエージェントが {{tool}} の実行を求めています",
+        "approve": "承認",
+        "reject": "拒否",
+        "stop": "停止",
+        "regenerate": "再生成",
+        "send": "送信"
       },
       "messageContextMenu": {
         "copy_link_text": "リンクのテキストをコピー",
@@ -12052,7 +12155,10 @@
       "crew_enable_named": "{{name}} を有効にする",
       "crew_spaces_unavailable": "{{name}} のフォルダーを読み込めませんでした。チャットはフォルダーなしで表示されています。",
       "crew_enable_failed": "{{name}} を有効にできませんでした",
-      "muted": "ミュート中: 音・通知・バッジなし"
+      "muted": "ミュート中: 音・通知・バッジなし",
+      "pick_a_model_for_every_session_switching_a_sessi": "各セッションのモデルを選択します。セッションを切り替えると",
+      "resets_its_conversation": "会話がリセットされます",
+      "new_ephemeral_chat": "新しいエフェメラルチャット"
     },
     "connectionsPage": {
       "action_failed": "操作に失敗しました: {{error}}",
@@ -12183,7 +12289,8 @@
       "turn_latest": "{{n}} ターン目 · 最新",
       "turn_n": "{{n}} ターン目",
       "turn_picker": "ターンを選ぶ",
-      "unit_chars": "文字"
+      "unit_chars": "文字",
+      "earlier_hidden_other": "それより前の {{count}} ターンは表示していません"
     },
     "crewBoard": {
       "title": "作業項目",
@@ -12657,7 +12764,9 @@
         "decisions_runtime_error": "モデルを起動できませんでした。",
         "decisions_runtime_retry": "再試行",
         "dashboard": "ダイナミックダッシュボード",
-        "dashboard_desc": "開発中のダイナミックダッシュボードを有効にします。チャット入力欄の上のステータス行、サイドパネルとクルーメイトのページにあるダッシュボード表示、そして「すべてのダッシュボード」ページです。レイアウトはまだ設計中のため、有効にするまで表示されません。自動カードのスイッチもここにあります。"
+        "dashboard_desc": "開発中のダイナミックダッシュボードを有効にします。チャット入力欄の上のステータス行、サイドパネルとクルーメイトのページにあるダッシュボード表示、そして「すべてのダッシュボード」ページです。レイアウトはまだ設計中のため、有効にするまで表示されません。自動カードのスイッチもここにあります。",
+        "remote_instance_sessions": "リモートクルーのセッション",
+        "merge_a_connected_remote_instances_live_sessions": "接続済みのリモートクルーのライブセッションをセッション一覧に統合し、それぞれにサーバーバッジを表示します。リモートクルーとは、接続した別のマシンのことで、エージェントのことではありません。動作しますが、まだ未完成です。"
       },
       "kiroSignInCard": {
         "title": "Kiro サインイン",
@@ -15574,7 +15683,9 @@
         "turn_time_limit_description": "1 回のチャットターンが停止されるまでに実行できる最長時間。300〜86,400 秒（24 時間）。既定は 14,400 秒（4 時間）。",
         "turn_time_limit_hint": "この制限に達したターンは停止しますが、ディスクに書き込まれた作業は残ります。再開すると続きから進みます。テストスイート全体の実行など、長時間の無人ターンでは値を上げてください。次のターンから適用されます。",
         "failed_to_save_compaction_wait_budget": "圧縮の待機時間を保存できませんでした",
-        "failed_to_save_turn_time_limit": "ターンの制限時間を保存できませんでした"
+        "failed_to_save_turn_time_limit": "ターンの制限時間を保存できませんでした",
+        "how_terse_the_agent_s_prose_is_ultra_concise_cap": "エージェントの文章の簡潔さを設定します。「極簡潔」は回答全体を短く保ちます。結論を先に示し、文章ではなく箇条書きを使い、前置きを省きます。コード・コマンド・エラー文字列はどのレベルでもそのまま維持され、セキュリティ警告は必ず示されますが簡潔にとどめ、手順の説明は完全なまま保たれます。 「回答のみ」はさらに踏み込んで説明を一切省きます。最大でも 1 文で、詳細は求められたとき、または判断の重みが大きい場合（セキュリティ、情報漏えい、データ損失、コスト、取り消しが難しいもの）に限って、正しく選べるよう理由まで示します。",
+        "ultra_concise_3_sentences": "極簡潔 — 結論を先に、文章は最小限"
       },
       "computerUsePanel": {
         "accessibility": "アクセシビリティ",
@@ -15630,7 +15741,8 @@
         "open_developer_page": "開発者ページを開く",
         "run_a_local_gateway": "ローカルゲートウェイを実行する",
         "show_developer_page_in_sidebar_with_logs_system": "サイドバーに開発者ページを表示（ログ、システムメトリクス、メモリ内部情報を含む）",
-        "turn_it_off_only_when_a_gateway_already_answers": "このマシンでゲートウェイを起動します。このアプリのポートがすでに別のマシンのクルーにつながっている場合を除き、オンのままにしてください。そうでないと、次回アプリを開いたとき（この設定が反映されるとき）に接続できません。そのためには、Connection メニューの「Set Remote Host…」でこのポートのクルーを保存し、さらにトンネルが必要です：そこで「Keep an SSH tunnel to this crew open」にチェックを入れる（macOS と Linux）か、ご自身の SSH トンネルを維持してください。これがオフのときは 設定 → リモートクルー の接続は止まるため、条件を満たしません。"
+        "turn_it_off_only_when_a_gateway_already_answers": "このマシンでゲートウェイを起動します。このアプリのポートがすでに別のマシンのクルーにつながっている場合を除き、オンのままにしてください。そうでないと、次回アプリを開いたとき（この設定が反映されるとき）に接続できません。そのためには、Connection メニューの「Set Remote Host…」でこのポートのクルーを保存し、さらにトンネルが必要です：そこで「Keep an SSH tunnel to this crew open」にチェックを入れる（macOS と Linux）か、ご自身の SSH トンネルを維持してください。これがオフのときは 設定 → リモートクルー の接続は止まるため、条件を満たしません。",
+        "start_a_gateway_on_this_machine_turn_it_off_to_u": "このマシンでゲートウェイを起動します。オフにすると {{productName}} をクライアントとしてのみ使用し、ここで起動する代わりに設定済みのゲートウェイに接続します。次回アプリを開いたときに反映されます。"
       },
       "discordPanel": {
         "allowed_server_channel_ids": "許可されたサーバーチャネル ID",
@@ -17732,7 +17844,16 @@
       "fresh_start_confirm_action": "リセットして再開",
       "fresh_start_failed_queued": "まだキューにメッセージがあります。終わるのを待ってから、もう一度リセットしてください。",
       "fresh_start_failed_busy": "クルーメイトはまだ作業中で止まりませんでした。先に止めてから、もう一度お試しください。",
-      "fresh_start_unsaved_fold": "この会話は忘れられ、メッセージは折りたたまれていますが、折りたたんだ時刻を保存できませんでした。再読み込み後にまた開きます。"
+      "fresh_start_unsaved_fold": "この会話は忘れられ、メッセージは折りたたまれていますが、折りたたんだ時刻を保存できませんでした。再読み込み後にまた開きます。",
+      "patrol_cycles_unlimited": "{{n}} · 上限なし",
+      "patrol_cycles_of": "{{max}} 回中 {{n}} 回",
+      "patrol_badge": "パトロール中 · {{cycle}}",
+      "meet_crewmates": "CrewMates を知る",
+      "meet_crewmates_hint": "最初のクルーメイトを作るガイド付きの入門です。",
+      "profile_model": "モデル",
+      "profile_model_auto": "自動",
+      "dashboard_empty": "{{name}} はまだダッシュボードを公開していません。このチャットで頼むと、公開した内容がここに表示されます。",
+      "profile_permissions_sub": "できること · エディターで設定"
     },
     "tasksCapacityCard": {
       "title": "タスクと処理能力",
@@ -18320,5 +18441,80 @@
       "composer_approval_mode": "メッセージ入力欄のコントロール行にある承認モードの選択ボタンです。ツール呼び出しを毎回確認するか、読み取りは確認なしで実行するか、このセッションを信頼するか、すべて自動承認するか（YOLO）を設定します。",
       "composer_voice_input": "メッセージ入力欄のマイクボタンです。押すと入力の代わりに音声で話せます。タッチスクリーンではキーボードと長押しで話すモードを切り替えます。"
     }
+  },
+  "crewEditorNext": {
+    "editor_aria": "新規クルーメイトエディター",
+    "section_general": "一般",
+    "section_built_from": "ベース",
+    "section_behavior": "動作",
+    "section_memory": "メモリ",
+    "section_danger": "危険ゾーン",
+    "tab_details": "詳細",
+    "tab_tools": "ツール",
+    "tab_mcp": "MCP サーバー",
+    "tab_skills": "スキル",
+    "tab_approvals": "承認",
+    "tab_model": "モデル",
+    "tab_triggers": "トリガー",
+    "tab_schedules": "スケジュール",
+    "tab_webhooks": "Webhook",
+    "tab_profile": "プロフィール",
+    "tab_recovery": "復旧",
+    "state_from_template": "テンプレートから",
+    "state_added": "このクルーメイトで追加",
+    "state_removed": "このクルーメイトで削除",
+    "state_added_short": "追加済み",
+    "state_removed_short": "削除済み",
+    "filter_tools": "ツールを絞り込み…",
+    "filter_tools_aria": "ツールを絞り込み",
+    "filter_skills": "スキルを絞り込み…",
+    "filter_skills_aria": "スキルを絞り込み",
+    "built_from_hint": "このクルーメイトがツールとスキルを継承するテンプレートです。",
+    "workspace_hint_default": "「default」はホームディレクトリにある共有ワークスペースフォルダーで、すべてのクルーメイトが使用します。別のものを選択または作成すると、このクルーメイトを専用フォルダーに分離できます。",
+    "workspace_hint_custom": "このクルーメイトが読み書きするフォルダーです。切り替えると、新しいチャットは新しいフォルダーで最初から始まり、以前のフォルダーは保持されます。",
+    "read_only": "読み取り専用",
+    "built_from_headline": "ベース",
+    "built_from_body": "このクルーメイトのツール、MCP サーバー、スキルはこのテンプレートに由来します。何が含まれるかは上のタブで確認してください。これらは継承されており、ここでは変更できません。テンプレートは「エージェント」ページで編集し、別のテンプレートへの切り替えは「一般」で行います。",
+    "template_unavailable": "このテンプレートは現在このマシンにインストールされていないため、クルーメイトは既定値にフォールバックします。{{name}} をインストールまたは復元すると、全機能が戻ります。",
+    "template_authored": "このテンプレートはあなたが作成したので、「エージェント」ページで直接編集できます。",
+    "triggers_frame": "トリガーは、誰かがすでに開始したタスクにオーケストレーターがこのクルーメイトを選ぶタイミングを決めます。自分で起動するのではなく、選ばれることに関するものです。",
+    "schedules_heading": "スケジュール",
+    "schedules_blurb": "時刻ベースの起動：このクルーメイトは、人がいなくてもスケジュールに従ってターンを開始します。トリガー（誰かのタスクに選ばれること）とは異なり、ここでは自分の意思で動きます。",
+    "webhooks_frame": "外部システムが呼び出すことでこのクルーメイトを起動します。トークンの発行と失効は Webhook ページのままです。",
+    "delete_crewmate": "クルーメイトを削除",
+    "loading_template": "テンプレートを読み込み中…",
+    "load_error": "テンプレートの機能を読み込めませんでした。",
+    "stat_mcp_servers": "MCP サーバー",
+    "stat_model": "モデル",
+    "memory_empty": "このクルーメイトにはまだプライベートメモリストアがありません。",
+    "memory_profile_frame": "このクルーメイトが学習しながらあなたと自分の作業について書き留めるメモで、各セッションに引き継がれます。読んで編集できますが、クルーメイトも更新し続けます。",
+    "sections_aria": "クルーメイト設定のセクション",
+    "builtfrom_sections_aria": "「ベース」のセクション",
+    "behavior_sections_aria": "「動作」のセクション",
+    "memory_sections_aria": "「メモリ」のセクション",
+    "state_disabled_word": "無効"
+  },
+  "crewApprovalsEditor": {
+    "loading": "承認を読み込み中…",
+    "load_error": "このクルーメイトの承認を読み込めませんでした。",
+    "agent_unavailable": "このクルーメイトのベースとなるエージェントが利用できないため、承認を編集できません。",
+    "intro": "{{member}} が確認なしで実行する内容を選びます。これはエージェントの上にあるクルーメイト独自のレイヤーで、新しいツールやスキルの追加はエージェント自体で行います。セキュリティポリシーが常に最終的な決定権を持ちます。",
+    "count": "{{total}} 件中 {{on}} 件を自動承認",
+    "unsaved": "未保存の変更",
+    "empty": "このクルーメイトのエージェントには自動承認できるものがありません。",
+    "section_tools": "ツール",
+    "section_mcp": "MCP サーバー",
+    "unknown_server": "（不明なサーバー）",
+    "auto_approve_aria": "{{label}} を自動承認",
+    "expansion_warning": "これらの付与の一部は、テンプレートを超えて、クルーメイトが無人で実行できる範囲を広げます。保存するとその拡張が要求されますが、セキュリティポリシーが実行時に引き続き制御します。",
+    "preview_failed": "変更をプレビューできませんでした。もう一度お試しください。",
+    "save_failed": "変更を保存できませんでした。もう一度お試しください。",
+    "discard": "破棄",
+    "btn_working": "処理中…",
+    "btn_save": "保存",
+    "btn_review": "変更を確認",
+    "state_changed": "変更済み",
+    "state_this_mate": "このクルーメイト",
+    "state_removed": "削除済み"
   }
 }

@@ -8360,6 +8360,18 @@
       "quote": "Citer",
       "quote_hint": "Cite la sélection dans le composeur de cette discussion — ta réponse part dans la discussion principale"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} a changé de nom",
+      "changed_description": "{{name}} a mis à jour sa description",
+      "changed_avatar": "{{name}} a changé d’avatar",
+      "changed_profile": "{{name}} a mis à jour son profil",
+      "undo": "Annuler",
+      "undone": "annulé",
+      "before": "Avant",
+      "after": "Après",
+      "undo_failed": "Impossible d’annuler cette modification : {{message}}",
+      "undo_unavailable": "Cette modification ne peut plus être annulée ici. Définissez la valeur dans le profil du crewmate : le crayon à côté de son nom ouvre l’éditeur."
+    },
     "sendToInstanceSubmenu": {
       "failed": "Échec",
       "not_connected": "non connecté",

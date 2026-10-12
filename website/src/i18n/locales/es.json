@@ -8360,6 +8360,18 @@
       "quote": "Citar",
       "quote_hint": "Cita la selección en el redactor de esta conversación: tu respuesta va al chat principal"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} cambió su nombre",
+      "changed_description": "{{name}} actualizó su descripción",
+      "changed_avatar": "{{name}} cambió su avatar",
+      "changed_profile": "{{name}} actualizó su perfil",
+      "undo": "Deshacer",
+      "undone": "deshecho",
+      "before": "Antes",
+      "after": "Después",
+      "undo_failed": "No se pudo deshacer este cambio: {{message}}",
+      "undo_unavailable": "Este cambio ya no se puede deshacer aquí. Define el valor en el perfil del crewmate: el lápiz junto a su nombre abre el editor."
+    },
     "sendToInstanceSubmenu": {
       "failed": "Falló",
       "not_connected": "no conectado",

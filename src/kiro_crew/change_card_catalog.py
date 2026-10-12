@@ -45,6 +45,7 @@ from datetime import datetime
 from typing import Any
 
 from kiro_crew import guide_catalog
+from kiro_crew.config.sections import MEMBER_APPROVAL_MODES
 
 KIND_SETTING_CHANGE = "setting.change"
 KIND_SCHEDULE_CREATE = "schedule.create"
@@ -237,7 +238,8 @@ KINDS: dict[str, KindDef] = {
         ),
         KindDef(
             KIND_CREWMATE_UPDATE,
-            "Change one crewmate's description, display name, model or effort.",
+            "Change one crewmate's description, display name, model, effort or the "
+            "approval mode of its own chat (normal, trust_reads, trust).",
             _obj(
                 {
                     "name": _STR,
@@ -247,6 +249,7 @@ KINDS: dict[str, KindDef] = {
                             "display_name": _STR,
                             "model": _STR,
                             "reasoning_effort": _STR,
+                            "approval_mode": _STR,
                         },
                         [],
                     ),
@@ -575,11 +578,20 @@ def validate_params(kind: str, params: Any) -> dict[str, Any]:
         fields = p.get("fields")
         if not isinstance(fields, dict) or not fields:
             raise _fail("invalid_param", "'fields' must be a non-empty object")
-        _only(fields, {"description", "display_name", "model", "reasoning_effort"}, "fields")
+        _only(
+            fields,
+            {"description", "display_name", "model", "reasoning_effort", "approval_mode"},
+            "fields",
+        )
         f = {}
         for key in fields:
             f[key] = _clean_str(
                 fields, key, max_len=_TEXT_MAX if key == "description" else 64, allow_empty=True
+            )
+        if "approval_mode" in f and f["approval_mode"] not in MEMBER_APPROVAL_MODES:
+            raise _fail(
+                "invalid_param",
+                "'approval_mode' must be one of " + ", ".join(MEMBER_APPROVAL_MODES),
             )
         return {"name": name, "fields": f}
     if kind == KIND_CREWMATE_CAPABILITIES:
@@ -1380,7 +1392,7 @@ def capability_inverse(
     """Operations that restore each row *draft* touches to its state in *rows*.
 
     ``None`` when a row cannot be restored exactly: an MCP server definition the
-    member set locally is shown redacted, so writing it back would not restore it.
+    mate set locally is shown redacted, so writing it back would not restore it.
     """
     by_key = {(r.get("section"), r.get("id")): r for r in rows if isinstance(r, dict)}
     ops: list[dict[str, Any]] = []

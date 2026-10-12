@@ -3104,6 +3104,18 @@
       "saving": "Saving…",
       "tap_to_comment": "Tap to write a comment…"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} changed its name",
+      "changed_description": "{{name}} updated its description",
+      "changed_avatar": "{{name}} changed its avatar",
+      "changed_profile": "{{name}} changed its profile",
+      "undo": "Undo",
+      "undone": "undone",
+      "before": "Before",
+      "after": "After",
+      "undo_failed": "Could not undo this change: {{message}}",
+      "undo_unavailable": "This change can no longer be undone here. Set the value in the crewmate's profile: the pencil beside its name opens the editor."
+    },
     "sessionActionsMenu": {
       "crew_board": "Crew board",
       "crew_board_failed": "Could not read this board",

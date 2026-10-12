@@ -1053,7 +1053,8 @@ it, or showing the user around (those three only); and finishes by asking what t
 user would like to call it (the name in question is the crewmate's own). The kickoff
 is written as plain principles, and the greeting itself is the model's own words.
 When the user answers with a name, that later turn says plainly that the crewmate now
-goes by it and calls the `kirocrew-guide` tool `rename_self` (`POST /api/guide/agent/rename`), which renames ONLY the calling
+goes by it and calls the `kirocrew-mate` tool `update_self` with `display_name`
+(`POST /api/member/self/update`, `handlers/member_self.py`), which renames ONLY the calling
 crewmate -- the member is derived from the caller's own pinned thread, never from an
 argument -- and only from a turn the user sent in the dashboard (`_turn_user_sent`,
 so the hidden welcome kickoff, a wake or a cron turn is refused 403
@@ -2307,7 +2308,7 @@ privilege boundary: the default agent frequently runs at broader approval, so a
 typo'd or injected name falling back to it would be an escalation at the manager
 primitive. An empty `agent` still means "use the default".
 
-Crew Mode resolves the member server-side instead of relying on the
+Crew Mode resolves the mate server-side instead of relying on the
 coincidence: `spawn_run(crew=<member>)` forwards `crew` in the request body
 (`mcp_tools/spawn.py`) to `dashboard/messaging_api/spawn.py`. That handler
 refuses a name that is not a key of `config.agents` with `404 unknown_member`,

@@ -8237,6 +8237,18 @@
       "quote": "उद्धरण",
       "quote_hint": "चयनित हिस्से को इसी बातचीत के कंपोज़र में उद्धृत करता है — तुम्हारा जवाब मुख्य चैट में जाएगा"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} ने अपना नाम बदला",
+      "changed_description": "{{name}} ने अपना विवरण बदला",
+      "changed_avatar": "{{name}} ने अपना अवतार बदला",
+      "changed_profile": "{{name}} ने अपनी प्रोफ़ाइल बदली",
+      "undo": "पूर्ववत करें",
+      "undone": "पूर्ववत किया गया",
+      "before": "पहले",
+      "after": "बाद में",
+      "undo_failed": "यह बदलाव पूर्ववत नहीं हो सका: {{message}}",
+      "undo_unavailable": "यह बदलाव अब यहाँ पूर्ववत नहीं किया जा सकता। मान को crewmate की प्रोफ़ाइल में सेट करें: नाम के पास की पेंसिल संपादक खोलती है।"
+    },
     "sendToInstanceSubmenu": {
       "failed": "विफल",
       "not_connected": "कनेक्ट नहीं है",

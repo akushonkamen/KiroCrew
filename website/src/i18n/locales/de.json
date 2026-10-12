@@ -8237,6 +8237,18 @@
       "quote": "Zitieren",
       "quote_hint": "Zitiert die Auswahl in den Verfasser dieses Gesprächs — deine Antwort geht in den Hauptchat"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} hat den Namen geändert",
+      "changed_description": "{{name}} hat die Beschreibung aktualisiert",
+      "changed_avatar": "{{name}} hat den Avatar geändert",
+      "changed_profile": "{{name}} hat das Profil aktualisiert",
+      "undo": "Rückgängig",
+      "undone": "rückgängig gemacht",
+      "before": "Vorher",
+      "after": "Nachher",
+      "undo_failed": "Diese Änderung konnte nicht rückgängig gemacht werden: {{message}}",
+      "undo_unavailable": "Diese Änderung kann hier nicht mehr rückgängig gemacht werden. Setze den Wert im Profil des Crewmates: der Stift neben dem Namen öffnet den Editor."
+    },
     "sendToInstanceSubmenu": {
       "failed": "Fehlgeschlagen",
       "not_connected": "nicht verbunden",

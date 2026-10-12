@@ -8483,6 +8483,18 @@
       "quote": "Цитировать",
       "quote_hint": "Цитирует выделенное в поле ввода этого разговора — твой ответ уйдёт в основной чат"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} изменил имя",
+      "changed_description": "{{name}} обновил описание",
+      "changed_avatar": "{{name}} изменил аватар",
+      "changed_profile": "{{name}} обновил профиль",
+      "undo": "Отменить",
+      "undone": "отменено",
+      "before": "До",
+      "after": "После",
+      "undo_failed": "Не удалось отменить это изменение: {{message}}",
+      "undo_unavailable": "Это изменение больше нельзя отменить здесь. Задайте значение в профиле crewmate: карандаш рядом с именем открывает редактор."
+    },
     "sendToInstanceSubmenu": {
       "failed": "Ошибка",
       "not_connected": "нет подключения",

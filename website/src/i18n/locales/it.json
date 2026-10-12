@@ -8360,6 +8360,18 @@
       "quote": "Cita",
       "quote_hint": "Cita la selezione nel compositore di questa conversazione: la tua risposta va nella chat principale"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} ha cambiato nome",
+      "changed_description": "{{name}} ha aggiornato la descrizione",
+      "changed_avatar": "{{name}} ha cambiato avatar",
+      "changed_profile": "{{name}} ha aggiornato il profilo",
+      "undo": "Annulla",
+      "undone": "annullato",
+      "before": "Prima",
+      "after": "Dopo",
+      "undo_failed": "Impossibile annullare questa modifica: {{message}}",
+      "undo_unavailable": "Questa modifica non può più essere annullata qui. Imposta il valore nel profilo del crewmate: la matita accanto al nome apre l’editor."
+    },
     "sendToInstanceSubmenu": {
       "failed": "Non riuscito",
       "not_connected": "non connesso",

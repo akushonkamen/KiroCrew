@@ -8114,6 +8114,18 @@
       "quote": "引用",
       "quote_hint": "把选中内容引用到本对话的输入框——你的回复会发到主聊天"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}} 改了名字",
+      "changed_description": "{{name}} 更新了简介",
+      "changed_avatar": "{{name}} 换了头像",
+      "changed_profile": "{{name}} 更新了资料",
+      "undo": "撤销",
+      "undone": "已撤销",
+      "before": "之前",
+      "after": "之后",
+      "undo_failed": "无法撤销这次更改：{{message}}",
+      "undo_unavailable": "这次更改已无法在这里撤销。请在 crewmate 的资料页里设置：名字旁边的铅笔会打开编辑器。"
+    },
     "sendToInstanceSubmenu": {
       "failed": "失败",
       "not_connected": "未连接",

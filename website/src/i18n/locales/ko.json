@@ -8114,6 +8114,18 @@
       "quote": "인용",
       "quote_hint": "선택한 부분을 이 대화의 입력창에 인용합니다 — 답장은 메인 채팅으로 전송됩니다"
     },
+    "selfChange": {
+      "changed_display_name": "{{name}}이(가) 이름을 바꿨습니다",
+      "changed_description": "{{name}}이(가) 설명을 업데이트했습니다",
+      "changed_avatar": "{{name}}이(가) 아바타를 바꿨습니다",
+      "changed_profile": "{{name}}이(가) 프로필을 업데이트했습니다",
+      "undo": "실행 취소",
+      "undone": "취소됨",
+      "before": "이전",
+      "after": "이후",
+      "undo_failed": "이 변경을 취소할 수 없습니다: {{message}}",
+      "undo_unavailable": "이 변경은 더 이상 여기서 취소할 수 없습니다. crewmate 프로필에서 값을 설정하세요. 이름 옆 연필이 편집기를 엽니다."
+    },
     "sendToInstanceSubmenu": {
       "failed": "실패",
       "not_connected": "연결되지 않음",

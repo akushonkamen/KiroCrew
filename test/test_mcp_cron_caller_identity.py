@@ -25,11 +25,13 @@ What these tests pin, in the order the fix depends on them:
    writing alike, and its refusal is indistinguishable from "no such job". Every
    creation path that has no session to name keeps writing such rows (the CLI, the
    importer), so this is a permanent scope rule, not a drainable exemption.
-6. A job that carries a crew-member binding — the ``member_id`` the creation
-   capture (``bind_cron_memory``) records for a member's own schedule — belongs
-   to that member, so any session whose vouched key names the member reaches it:
-   read and write alike, through the one scope function. A key that names no
-   member gains nothing, a row without the binding stays session-scoped, an
+6. A row whose own ``session_key`` names the same crew member the caller's
+   vouched key names belongs to that member, so any session whose key names the
+   member reaches it: read and write alike, through the one scope function. The
+   match is key structure on BOTH sides — never ``job.member_id``, which is the
+   execution member ``cron_add`` lets the caller choose and so is no evidence of
+   who owns a row. A key that names no member gains nothing, a row created
+   outside the member's sessions stays out of reach however it is labelled, an
    ownerless row stays outside every scope, and an unidentifiable caller still
    reaches nothing.
 """
@@ -686,17 +688,27 @@ def test_dashboard_session_may_schedule_for_another_crew() -> None:
     assert "Added job" in result
 
 
-# --- 6: the crew-member binding --------------------------------------------
+# --- 6: the crew-member scope -----------------------------------------------
+#
+# A member is one principal across every key its pinned DM thread presents. The
+# gate matches the member the CALLER's key names against the member the ROW's own
+# session key names -- both read off key structure (_authz_member_id). It must
+# never read job.member_id for this: cron_add takes that field from the CALLER
+# ("Crew Member responsible for this schedule... Omit to inherit"), and
+# bind_cron_memory persists the choice beside the creator's owning session, so it
+# records who a job RUNS AS -- a label any caller may fill -- and not who owns it.
 
 
 def _bind_member(job_id: str, member: str) -> None:
-    """Record on the stored row the member binding the creation capture writes.
+    """Record on the stored row the execution member ``cron_add`` can be told.
 
-    A member DM session carries its member in its execution identity, so a job a
-    member creates is persisted with ``member_id`` naming that member
-    (``bind_cron_memory``). Seeding the one field the gate reads keeps these
-    tests on the ownership contract itself rather than re-standing-up the member
-    config the full capture path resolves.
+    ``cron_add`` accepts a caller-chosen ``member_id`` and ``bind_cron_memory``
+    persists exactly that choice on the row next to the creator's own session.
+    Seeding the field this way -- from OUTSIDE the creating session -- is the
+    attack's own shape, which is the point: the gate must reach the same verdict
+    with the field filled as with it empty, because a caller-chosen field decides
+    nothing. These tests stay on the ownership contract rather than re-standing-up
+    the member config the full capture path resolves.
     """
     svc = CronService(base_dir=mcp_cron.config_dir())
     job = svc.get_job(job_id)
@@ -710,9 +722,10 @@ def test_a_member_reaches_its_own_job_from_a_later_session() -> None:
 
     A member's pinned DM thread outlives any one session: the thread's slot key
     travels under more than one layer prefix, and the session a resumed turn
-    presents is not the string the creating turn presented. The job the member
-    created carries the member binding, so the gate accepts the member's later
-    session for reads and for every mutating verb alike.
+    presents is not the string the creating turn presented. The row's own session
+    key and the caller's key name the same member, so the gate accepts the
+    member's later session for reads and for every mutating verb alike -- with
+    the stored ``member_id`` whatever the creating call left on it.
     """
     _as_session("dashboard:member-alice")
     name = f"alice-{uuid.uuid4().hex[:8]}"
@@ -730,7 +743,7 @@ def test_a_member_reaches_its_own_job_from_a_later_session() -> None:
 
 
 def test_another_member_stays_outside_the_scope() -> None:
-    """A binding widens nothing across members, and the refusal stays the shared one.
+    """The arm widens nothing across members, and the refusal stays the shared one.
 
     Bob learns nothing about Alice's row: it is withheld from the list, and the
     mutation answers the exact string an absent id gets, so the gate keeps its
@@ -747,6 +760,45 @@ def test_another_member_stays_outside_the_scope() -> None:
         hers = _call_tool_inner(tool, {"job_id": job_id, "message": "x"})
         absent = _call_tool_inner(tool, {"job_id": "deadbeef", "message": "x"})
         assert hers.replace(job_id, "X") == absent.replace("deadbeef", "X"), (tool, hers)
+
+
+def test_a_different_store_of_the_same_member_stays_out_of_scope() -> None:
+    """The member arm matches SLOTS, not slugs: a store suffix is part of who owns a row.
+
+    A member's DM slot key carries an optional ``.memory-<store>`` suffix that
+    is part of the slot's identity (``read_dm_binding_for_slot`` keeps memory
+    store generations apart on purpose). The arm may span the slot's two layer
+    prefixes -- ``dashboard:member-alice`` and ``dashboard_member-alice`` are the
+    same slot -- but not the slot's store generations: a job created in one
+    store stays out of the member's other stores, both directions, for reads,
+    every mutating verb and the bulk sweep.
+    """
+    _as_session("dashboard:member-alice.memory-alpha")
+    name = f"alice-alpha-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+    _bind_member(job_id, "alice")
+
+    _as_session("dashboard_member-alice.memory-beta")
+    assert name not in _call_tool_inner("cron_list", {})
+    _call_tool_inner("cron_remove_all", {})
+    assert (
+        CronService(base_dir=mcp_cron.config_dir()).get_job(job_id) is not None
+    ), "cron_remove_all swept a row owned by a different store of the same member"
+    for tool in _MUTATING_TOOLS:
+        other = _call_tool_inner(tool, {"job_id": job_id, "message": "x"})
+        absent = _call_tool_inner(tool, {"job_id": "deadbeef", "message": "x"})
+        assert other.replace(job_id, "X") == absent.replace("deadbeef", "X"), (tool, other)
+    # The storeless spelling is yet another slot: it gains nothing either.
+    _as_session("dashboard:member-alice")
+    assert name not in _call_tool_inner("cron_list", {})
+    # And the reverse direction: the storeless creator's row stays out of the store.
+    _as_session("dashboard:member-alice")
+    plain = f"alice-plain-{uuid.uuid4().hex[:8]}"
+    plain_id = _add_job(plain)
+    _as_session("dashboard:member-alice.memory-alpha")
+    assert plain not in _call_tool_inner("cron_list", {})
+    plain_row = CronService(base_dir=mcp_cron.config_dir()).get_job(plain_id)
+    assert plain_row is not None and plain_row.enabled is True
 
 
 def test_a_key_that_names_no_member_gains_nothing() -> None:
@@ -766,19 +818,61 @@ def test_a_key_that_names_no_member_gains_nothing() -> None:
     assert "job not found" in _call_tool_inner("cron_remove", {"job_id": job_id}).lower()
 
 
-def test_a_row_without_the_binding_stays_session_scoped() -> None:
-    """No binding, no widening: the exact key remains the only match.
+def test_the_row_reaches_the_member_on_its_own_key_not_the_labelled_field() -> None:
+    """The widening's positive half: the ROW's key is what names the member.
 
-    A member's later session does not inherit a row that records no member --
-    the gate reaches rows through the binding, not through whoever is calling.
+    A member-created row reaches the member's later session through the member
+    its OWN session key names -- the stored ``member_id`` is not consulted (and
+    could not be: the caller chooses it). A row that records no execution member
+    at all still belongs to the member whose session created it.
     """
     _as_session("dashboard:member-alice")
     name = f"alice-{uuid.uuid4().hex[:8]}"
     job_id = _add_job(name)
 
     _as_session("dashboard_member-alice")
+    assert name in _call_tool_inner("cron_list", {})
+    updated = _call_tool_inner("cron_update", {"job_id": job_id, "message": "sweep again"})
+    assert "Updated job" in updated, updated
+
+
+@pytest.mark.parametrize(
+    "creator_key",
+    [
+        "dashboard:chat-4242",  # an ordinary chat session names no member
+        "dashboard:member-bob",  # another member's verified DM session
+        "dashboard_member-bob.memory-alpha",  # the other prefix, with a store suffix
+    ],
+)
+def test_a_row_created_elsewhere_stays_out_of_the_member_it_names(creator_key: str) -> None:
+    """The gate's own negative: a self-filled ``member_id`` authorizes nothing.
+
+    ``cron_add`` lets the CALLER pick the row's ``member_id`` and
+    ``bind_cron_memory`` persists that pick beside the creator's own session, so
+    the field says who a job RUNS AS -- a label the caller may fill with any
+    member's id. Ownership must therefore come from the row's own session key:
+    neither a chat session's row nor Bob's row becomes Alice's because either was
+    labelled with her id. Read, every mutating verb and the bulk sweep all stay
+    out, and the per-row refusals keep the shared anti-enumeration wording.
+    """
+    _as_session(creator_key)
+    name = f"labelled-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+    _bind_member(job_id, "alice")
+
+    _as_session("dashboard:member-alice")
     assert name not in _call_tool_inner("cron_list", {})
-    assert "job not found" in _call_tool_inner("cron_pause", {"job_id": job_id}).lower()
+    # The bulk sweep is a write through the one scope: it must not take the row.
+    _call_tool_inner("cron_remove_all", {})
+    assert (
+        CronService(base_dir=mcp_cron.config_dir()).get_job(job_id) is not None
+    ), "cron_remove_all removed a row labelled with the caller's member id"
+    for tool in _MUTATING_TOOLS:
+        hers = _call_tool_inner(tool, {"job_id": job_id, "message": "x"})
+        absent = _call_tool_inner(tool, {"job_id": "deadbeef", "message": "x"})
+        assert hers.replace(job_id, "X") == absent.replace("deadbeef", "X"), (tool, hers)
+    after = CronService(base_dir=mcp_cron.config_dir()).get_job(job_id)
+    assert after is not None and after.enabled is True
 
 
 def test_an_ownerless_row_stays_out_of_scope_even_when_member_bound() -> None:

@@ -25,6 +25,13 @@ What these tests pin, in the order the fix depends on them:
    writing alike, and its refusal is indistinguishable from "no such job". Every
    creation path that has no session to name keeps writing such rows (the CLI, the
    importer), so this is a permanent scope rule, not a drainable exemption.
+6. A job that carries a crew-member binding — the ``member_id`` the creation
+   capture (``bind_cron_memory``) records for a member's own schedule — belongs
+   to that member, so any session whose vouched key names the member reaches it:
+   read and write alike, through the one scope function. A key that names no
+   member gains nothing, a row without the binding stays session-scoped, an
+   ownerless row stays outside every scope, and an unidentifiable caller still
+   reaches nothing.
 """
 
 from __future__ import annotations
@@ -677,3 +684,169 @@ def test_dashboard_session_may_schedule_for_another_crew() -> None:
     )
 
     assert "Added job" in result
+
+
+# --- 6: the crew-member binding --------------------------------------------
+
+
+def _bind_member(job_id: str, member: str) -> None:
+    """Record on the stored row the member binding the creation capture writes.
+
+    A member DM session carries its member in its execution identity, so a job a
+    member creates is persisted with ``member_id`` naming that member
+    (``bind_cron_memory``). Seeding the one field the gate reads keeps these
+    tests on the ownership contract itself rather than re-standing-up the member
+    config the full capture path resolves.
+    """
+    svc = CronService(base_dir=mcp_cron.config_dir())
+    job = svc.get_job(job_id)
+    assert job is not None
+    job.member_id = member
+    svc._save()
+
+
+def test_a_member_reaches_its_own_job_from_a_later_session() -> None:
+    """The member is the principal; the creating session was only one of its keys.
+
+    A member's pinned DM thread outlives any one session: the thread's slot key
+    travels under more than one layer prefix, and the session a resumed turn
+    presents is not the string the creating turn presented. The job the member
+    created carries the member binding, so the gate accepts the member's later
+    session for reads and for every mutating verb alike.
+    """
+    _as_session("dashboard:member-alice")
+    name = f"alice-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+    _bind_member(job_id, "alice")
+
+    # A later session of the same member, spelled at the other layer prefix.
+    _as_session("dashboard_member-alice")
+    assert name in _call_tool_inner("cron_list", {})
+    updated = _call_tool_inner("cron_update", {"job_id": job_id, "message": "sweep again"})
+    assert "Updated job" in updated, updated
+    assert "job not found" not in updated.lower()
+    removed = _call_tool_inner("cron_remove", {"job_id": job_id})
+    assert f"Removed job: {job_id}" in removed, removed
+
+
+def test_another_member_stays_outside_the_scope() -> None:
+    """A binding widens nothing across members, and the refusal stays the shared one.
+
+    Bob learns nothing about Alice's row: it is withheld from the list, and the
+    mutation answers the exact string an absent id gets, so the gate keeps its
+    anti-enumeration shape.
+    """
+    _as_session("dashboard:member-alice")
+    name = f"alice-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+    _bind_member(job_id, "alice")
+
+    _as_session("dashboard:member-bob")
+    assert name not in _call_tool_inner("cron_list", {})
+    for tool in _MUTATING_TOOLS:
+        hers = _call_tool_inner(tool, {"job_id": job_id, "message": "x"})
+        absent = _call_tool_inner(tool, {"job_id": "deadbeef", "message": "x"})
+        assert hers.replace(job_id, "X") == absent.replace("deadbeef", "X"), (tool, hers)
+
+
+def test_a_key_that_names_no_member_gains_nothing() -> None:
+    """The member arm keys on the caller's own member, derived from its key.
+
+    An ordinary chat slot names no member, so it reads no member-bound row and
+    touches none -- the widening is a principal match, not a relaxation for
+    whoever happens to be calling.
+    """
+    _as_session("dashboard:member-alice")
+    name = f"alice-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+    _bind_member(job_id, "alice")
+
+    _as_session("dashboard:chat-4242")
+    assert name not in _call_tool_inner("cron_list", {})
+    assert "job not found" in _call_tool_inner("cron_remove", {"job_id": job_id}).lower()
+
+
+def test_a_row_without_the_binding_stays_session_scoped() -> None:
+    """No binding, no widening: the exact key remains the only match.
+
+    A member's later session does not inherit a row that records no member --
+    the gate reaches rows through the binding, not through whoever is calling.
+    """
+    _as_session("dashboard:member-alice")
+    name = f"alice-{uuid.uuid4().hex[:8]}"
+    job_id = _add_job(name)
+
+    _as_session("dashboard_member-alice")
+    assert name not in _call_tool_inner("cron_list", {})
+    assert "job not found" in _call_tool_inner("cron_pause", {"job_id": job_id}).lower()
+
+
+def test_an_ownerless_row_stays_out_of_scope_even_when_member_bound() -> None:
+    """The admin surface's rows stay outside every session's scope, both ways.
+
+    ``kirocrew cron add`` and the importer write rows with no owning session, and
+    such a row may still name a member it runs as. The member arm requires a
+    session owner to widen through: a row outside every session's scope is a
+    permanent rule, and the CLI and the Schedule page remain its surface.
+    """
+    svc = CronService(base_dir=mcp_cron.config_dir())
+    name = f"cli-made-{uuid.uuid4().hex[:8]}"
+    unowned = svc.add_job(name=name, message="go", every_secs=120, session_key="")
+    _bind_member(unowned.id, "alice")
+
+    _as_session("dashboard:member-alice")
+    assert name not in _call_tool_inner("cron_list", {})
+    for tool in _MUTATING_TOOLS:
+        result = _call_tool_inner(tool, {"job_id": unowned.id})
+        assert "job not found" in result.lower(), (tool, result)
+    after = CronService(base_dir=mcp_cron.config_dir()).get_job(unowned.id)
+    assert after is not None and after.enabled is True
+
+
+def test_an_unidentifiable_caller_still_reaches_nothing() -> None:
+    """No vouched identity, no member arm: the empty scope covers bound rows too.
+
+    A caller the gateway cannot name may share a pooled backend with identified
+    sessions; a member binding on a row says nothing about an unidentified
+    caller, so the answer stays "nothing at all".
+    """
+    _as_session("dashboard:member-alice")
+    bound = f"bound-{uuid.uuid4().hex[:8]}"
+    bound_id = _add_job(bound)
+    _bind_member(bound_id, "alice")
+    plain = f"plain-{uuid.uuid4().hex[:8]}"
+    _add_job(plain)
+
+    set_current_caller(None)
+    listed = _call_tool_inner("cron_list", {})
+    assert bound not in listed
+    assert plain not in listed
+    assert "cannot determine which session is calling" in _call_tool_inner("cron_remove_all", {})
+
+
+def test_cron_remove_all_sweeps_the_member_rows_from_any_of_its_sessions() -> None:
+    """The batch read goes through the same one scope function.
+
+    From the member's later session, ``cron_remove_all`` removes the rows the
+    member owns -- the bound one and the one this session created -- and leaves
+    another member's row alone.
+    """
+    _as_session("dashboard:member-alice")
+    older = f"alice-older-{uuid.uuid4().hex[:8]}"
+    older_id = _add_job(older)
+    _bind_member(older_id, "alice")
+    _as_session("dashboard_member-alice")
+    newer = f"alice-newer-{uuid.uuid4().hex[:8]}"
+    _add_job(newer)
+    _as_session("dashboard:member-bob")
+    bobs = f"bob-{uuid.uuid4().hex[:8]}"
+    bobs_id = _add_job(bobs)
+    _bind_member(bobs_id, "bob")
+
+    _as_session("dashboard_member-alice")
+    result = _call_tool_inner("cron_remove_all", {})
+    assert "Removed" in result, result
+    survived = {
+        j.name for j in CronService(base_dir=mcp_cron.config_dir()).list_jobs(include_disabled=True)
+    }
+    assert survived == {bobs}, survived

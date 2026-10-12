@@ -9580,6 +9580,15 @@ async def _run_chat(
     # applied: a turn-end contract violation. Only counted, then reported once
     # at turn end — it never fails the turn and never re-arms recovery.
     _activity_after_terminal = 0
+    # A person's steer entered this turn (admitted into the live stream by
+    # ``chat_delivery.steer_into_running_turn``, which registers it in
+    # ``slot._pending_steers``). Any text after that may be the model's answer
+    # to that person — including text after a quiet end the model reached once
+    # it had read the steer — so the post-terminal text drop below is off for
+    # the rest of the turn: a stray bubble is recoverable, a dropped answer is
+    # not. The runner's own in-band notices never register in
+    # ``_pending_steers``, so they do not lift it.
+    _person_steered_turn = False
 
     def _record_terminal_directive(kind: str, outcome: DirectiveOutcome, tcid: str) -> None:
         nonlocal _terminal_directive_applied, _terminal_directive_kind
@@ -12365,6 +12374,27 @@ async def _run_chat(
                 )
 
             if event.kind == EVENT_TEXT_CHUNK:
+                if _terminal_directive_applied and not _person_steered_turn:
+                    if getattr(slot, "_pending_steers", None):
+                        # A person steered into the quiet-ended turn and the
+                        # backend has not echoed consumption yet (codex reports
+                        # it only at the terminal): this text may already be
+                        # the answer to them, so keep every chunk from here on.
+                        _person_steered_turn = True
+                    else:
+                        # The turn already ended on an applied terminal
+                        # directive (the applier's structured ``ends_turn``,
+                        # never the prose): the quiet-end tool row is the
+                        # turn's recorded output, so text arriving after it is
+                        # a turn-end contract violation and NOT a reply. It is
+                        # counted for the one warning at turn end and dropped
+                        # here — neither accumulated, streamed to the wire, nor
+                        # persisted as an assistant row. Today's source of such
+                        # text is the model echoing the backend's request-side
+                        # alternation filler after a tool-result tail, but the
+                        # drop keys on the signal, not the words.
+                        _activity_after_terminal += 1
+                        continue
                 # If we just exited a tool group, finalize the streaming
                 # message so post-tool text starts a fresh message.
                 if in_tool_group:
@@ -12447,8 +12477,6 @@ async def _run_chat(
                 # test_subagent_delivery_ttl_anchor), so a diagnostic flag goes
                 # above it rather than between the two.
                 _saw_text_chunk = True
-                if _terminal_directive_applied:
-                    _activity_after_terminal += 1
                 _turn_emitted = True  # tokens delivered — transient retry now unsafe
                 await _report_consumed(irreversible=True)
                 # Stream to the wire through the rolling buffer so a credential
@@ -15289,7 +15317,15 @@ async def _run_chat(
                     )
                     continue
             elif event.kind == EVENT_STEER_CONSUMED:
+                _had_person_steer = bool(getattr(slot, "_pending_steers", None))
                 _settle_consumed_steers(slot, event.text or "", state)
+                if _had_person_steer:
+                    # A person's steer is in this turn (kiro-cli echoes
+                    # consumption BEFORE the model's reply streams). Whether
+                    # the quiet end has already applied or comes later, the
+                    # post-terminal text drop must not eat their answer. Read
+                    # before the settle, which clears the entry.
+                    _person_steered_turn = True
                 if _refusal_notices:
                     # Same echo, same parser as the user-steer ledger: an
                     # empty echo is no evidence, and treating it as delivery
@@ -16636,7 +16672,12 @@ async def _run_chat(
                     _refusal_card,
                     "msg msg-err",
                 )
-        elif should_continue_after_compaction(
+        elif not _terminal_directive_applied and should_continue_after_compaction(
+            # A turn that ended on an applied terminal directive is answered by
+            # that directive, whatever compaction happened before it: the empty
+            # segment the drop above leaves is the quiet end, not an abandoned
+            # request, so no continuation — same guard as the empty-response
+            # arm below.
             # The context window filled mid-turn, the backend summarized, and the
             # turn then ended without finishing the request — the "hangs after
             # Compacting..." symptom. kiro-cli self-heals (it re-sends the pending

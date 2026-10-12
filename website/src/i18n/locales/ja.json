@@ -2597,7 +2597,7 @@
             "submit_edit": "変更を保存",
             "title_create": "新しいクルー",
             "title_edit": "クルーを編集",
-            "triage_model_hint": "キューを確認するだけのターンに使う安価なモデルです。進行中の作業は「モデル」で実行します。",
+            "triage_model_hint": "新しい作業がないかを安価なモデルで確認し、Issue に作業が必要になった時点で上の「モデル」に切り替えます。バッジは各モデルのクレジットコストです。オフ：常に上の「モデル」を使います。",
             "triage_model_label": "トリアージモデル",
             "triage_model_off": "オフ",
             "unattended_hint": "信頼はスロットごとで、サイクルごとに再確立されます。オフにすると、承認待ちで止まらずにエスカレーションします。",
@@ -2666,7 +2666,8 @@
             "slots_free_other": "空きスロット {{count}} 件",
             "state_idle": "アイドル",
             "state_paused": "一時停止中",
-            "triage_model_unavailable": "トリアージモデル {{model}} はこのアカウントでは利用できないため、すべてのターンを作業用モデルで実行します。",
+            "triage_model_change": "トリアージモデルを変更",
+            "triage_model_unavailable": "{{model}} はこのアカウントでは利用できないため、このクルーはすべてのターンを「モデル」（{{workModel}}）で実行します。別のトリアージモデルを選ぶか、オフにしてください。",
             "work_log": "作業ログ",
             "work_log_hint": "直近 24h をハイライト"
           },

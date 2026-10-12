@@ -21,7 +21,7 @@
  * two states.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from './helpers'
@@ -222,8 +222,20 @@ describe('CrewPageView — triage model', () => {
     renderPage()
 
     const notice = await screen.findByTestId('crew-triage-model-unavailable')
-    expect(notice).toHaveTextContent(copy('triage_model_unavailable', { model: 'gpt-5.6-sol' }))
+    expect(notice).toHaveTextContent(
+      copy('triage_model_unavailable', { model: 'gpt-5.6-sol', workModel: crew().model }),
+    )
     expect(notice).toHaveAttribute('role', 'status')
+  })
+
+  it('offers the way to change it beside the notice', async () => {
+    api.crew.mockResolvedValue(payload({ triage_model_unavailable: 'gpt-5.6-sol' }))
+    const onEdit = vi.fn()
+    renderWithProviders(<CrewPageView crewId="crew-andromeda" onEdit={onEdit} />)
+
+    fireEvent.click(await screen.findByTestId('crew-triage-model-change'))
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    expect(onEdit.mock.calls[0][0]).toMatchObject({ id: crew().id })
   })
 
   it('shows nothing when the triage model runs, or the gateway does not report it', async () => {

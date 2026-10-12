@@ -383,14 +383,26 @@ export default function CrewPageView({ crewId, onEdit }: CrewPageViewProps) {
             </div>
           )}
           {/* Nothing failed: the crew keeps working, on its work model. Shown so a
-              triage model the account cannot run is never a silent no-op. */}
-          <StatusNotice
-            message={triageUnavailable
-              ? t('apps.issueRadar.views.crews.page.triage_model_unavailable', { model: triageUnavailable })
-              : null}
-            className="mt-1.5"
-            testId="crew-triage-model-unavailable"
-          />
+              triage model the account cannot run is never a silent no-op, with
+              the way to change it beside it. */}
+          {triageUnavailable !== '' && (
+            <div className="mt-1.5 flex flex-wrap items-start gap-2">
+              <StatusNotice
+                message={t('apps.issueRadar.views.crews.page.triage_model_unavailable', {
+                  model: triageUnavailable,
+                  workModel: crew.model || t('apps.issueRadar.views.crews.editor.model_auto'),
+                })}
+                className="min-w-0 flex-1"
+                testId="crew-triage-model-unavailable"
+              />
+              {onEdit && (
+                <Btn onClick={() => { onEdit(crew) }} data-testid="crew-triage-model-change">
+                  <Pencil className="lucide-inline" />
+                  {t('apps.issueRadar.views.crews.page.triage_model_change')}
+                </Btn>
+              )}
+            </div>
+          )}
           {/* Opening the crew's session acts on a persisted slot; no draft here. */}
           <ErrorNotice
             message={sessionError}

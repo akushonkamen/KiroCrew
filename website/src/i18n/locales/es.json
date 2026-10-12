@@ -2598,7 +2598,7 @@
             "submit_edit": "Guardar cambios",
             "title_create": "Equipo nuevo",
             "title_edit": "Editar equipo",
-            "triage_model_hint": "Un modelo más barato para los turnos que solo revisan la cola. El trabajo activo usa Modelo.",
+            "triage_model_hint": "Busca trabajo nuevo con un modelo más barato y cambia al Modelo de arriba en cuanto un issue necesita trabajo. Las insignias muestran el coste en créditos de cada modelo. Desactivado: siempre el Modelo de arriba.",
             "triage_model_label": "Modelo de triaje",
             "triage_model_off": "Desactivado",
             "unattended_hint": "Confianza por slot, restablecida en cada ciclo. Desactivado significa que escala en lugar de quedarse esperando en un aviso de aprobación.",
@@ -2678,7 +2678,8 @@
             "slots_free_other": "{{count}} slots libres",
             "state_idle": "inactivo",
             "state_paused": "en pausa",
-            "triage_model_unavailable": "El modelo de triaje {{model}} no está disponible para esta cuenta, así que cada turno usa el modelo de trabajo.",
+            "triage_model_change": "Cambiar modelo de triaje",
+            "triage_model_unavailable": "{{model}} no está disponible para esta cuenta, así que este equipo usa el Modelo ({{workModel}}) en cada turno. Elige otro modelo de triaje o desactívalo.",
             "work_log": "Registro de trabajo",
             "work_log_hint": "24 h destacadas"
           },

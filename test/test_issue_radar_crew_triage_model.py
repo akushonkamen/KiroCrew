@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from typing import Any
+from unittest import mock
 
 from kiro_crew.apps.builtins.issue_radar.backend import crew_model as cm
 from kiro_crew.apps.builtins.issue_radar.backend import crew_store as cs
@@ -53,6 +54,7 @@ class _State:
 
     def __init__(self, live: set[str] | None = None) -> None:
         self.sessions = _Sessions({session_key_for(key) for key in (live or ())})
+        self._slots: dict[str, Any] = {}
 
 
 def _crew(**fields: Any) -> dict[str, Any]:
@@ -134,6 +136,44 @@ class TestApplyTurnModel(_Isolated):
         )
         self.assertEqual(slot.model, WORK)
         self.assertIsNone(slot._pending_reset_history_key)
+
+    def test_another_slot_mid_turn_on_the_session_is_left_alone(self):
+        # The session_set_model pick's own deferral, through its own predicate: a
+        # registered session with a turn in flight belongs to whoever is driving it.
+        class _Busy:
+            def has_active_turn(self) -> bool:
+                return True
+
+        class _Registry(_State):
+            def __init__(self) -> None:
+                super().__init__()
+                self.sessions.get_provider = lambda key: _Busy()  # type: ignore[method-assign]
+
+        slot = _Slot()
+        self.assertFalse(cm.apply_turn_model(_Registry(), slot, _crew(triage_model=TRIAGE), []))
+        self.assertEqual(slot.model, WORK)
+        self.assertIsNone(slot._pending_reset_history_key)
+
+    def test_another_running_slot_on_the_session_is_left_alone(self):
+        other = _Slot(key="chat-7")
+        other.running = True
+        other._turn_key = session_key_for("crew-c_1")  # type: ignore[attr-defined]
+        state = _State()
+        state._slots = {"chat-7": other}
+        slot = _Slot()
+        with mock.patch(
+            "kiro_crew.dashboard.chat_handlers._cancel_target",
+            lambda s: getattr(s, "_turn_key", session_key_for(s.key)),
+        ):
+            self.assertFalse(cm.apply_turn_model(state, slot, _crew(triage_model=TRIAGE), []))
+        self.assertEqual(slot.model, WORK)
+
+    def test_an_idle_registry_still_switches(self):
+        slot = _Slot()
+        self.assertTrue(
+            cm.apply_turn_model(_State({"crew-c_1"}), slot, _crew(triage_model=TRIAGE), [])
+        )
+        self.assertEqual(slot.model, TRIAGE)
 
     def test_a_picker_transaction_in_flight_is_left_alone(self):
         async def run() -> None:

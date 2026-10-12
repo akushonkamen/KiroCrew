@@ -2114,11 +2114,37 @@ class TestTriageModel(unittest.IsolatedAsyncioTestCase):
     """A crew's triage model is chosen from its ledger before every turn.
 
     Pinned at the two places a turn's model is decided: the wake, right before the
-    dispatch, and the watchdog pass that keeps the idle-timer turn in step.
+    dispatch, and the watchdog pass that keeps the idle-timer turn in step and
+    escalates a triage turn that found work.
     """
 
     WORK = "claude-opus-4.5"
     TRIAGE = "claude-haiku-4.5"
+
+    class _Slot(_FakeSlot):
+        """The slot surface the shared model-switch helpers read."""
+
+        def __init__(self, *a: Any, **kw: Any) -> None:
+            super().__init__(*a, **kw)
+            self._model_pick_lock = asyncio.Lock()
+            self._eager_spawn_task = None
+            self._pending_reset_history_key: str | None = None
+            self._model_pick_gen = 0
+
+    class _Sessions:
+        def get_provider(self, key: str) -> None:
+            return None
+
+    class _State(_FakeState):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sessions = TestTriageModel._Sessions()
+            self._slots = self.slots
+
+        def get_or_create_slot(self, name: str = "", model: str = "", **kw: Any) -> _FakeSlot:
+            if name not in self.slots:
+                self.slots[name] = TestTriageModel._Slot(name, model=model)
+            return super().get_or_create_slot(name=name, model=model, **kw)
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -2132,7 +2158,7 @@ class TestTriageModel(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(crew_model._written.clear)
 
     async def _wake(self, crew: dict[str, Any]) -> tuple[_FakeSlot, list[str]]:
-        state = _FakeState()
+        state = self._State()
         slot = await cr.ensure_crew_session(state, OWNER, REPO, crew)
         seen: list[str] = []
         real = slot.enqueue_or_run_prompt
@@ -2164,7 +2190,7 @@ class TestTriageModel(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_watchdog_keeps_the_idle_turn_in_step_with_the_ledger(self):
         crew = _crew(self.root, unattended=True, model=self.WORK, triage_model=self.TRIAGE)
-        state = _FakeState()
+        state = self._State()
         svc = _FakeNudge([_FakeLoop("nl_0", cr._slot_key(crew))])
         with mock.patch.object(cr, "_autonudge_instance", lambda: svc):
             slot = await cr.ensure_crew_session(state, OWNER, REPO, crew)
@@ -2173,6 +2199,36 @@ class TestTriageModel(unittest.IsolatedAsyncioTestCase):
             _item(self.root, crew["id"], 12, phase="claimed")
             await cr.watchdog_cycle(state, OWNER, REPO, [crew], self.root)
             self.assertEqual(slot.model, self.WORK)
+
+    async def test_a_triage_turn_that_found_work_is_escalated_at_once(self):
+        """CI red -> a triage turn records the move -> the next pass dispatches the
+        work-model turn itself, instead of leaving it for the idle timer."""
+        crew = _crew(self.root, unattended=True, model=self.WORK, triage_model=self.TRIAGE)
+        _item(self.root, crew["id"], 12, phase="awaiting-ci", pr_number=40)
+        state = self._State()
+        svc = _FakeNudge([_FakeLoop("nl_0", cr._slot_key(crew))])
+        with mock.patch.object(cr, "_autonudge_instance", lambda: svc):
+            slot = await cr.ensure_crew_session(state, OWNER, REPO, crew)
+            await cr.wake_crew(state, OWNER, REPO, crew, "ci-changed", self.root)
+            self.assertEqual(slot.model, self.TRIAGE)
+            self.assertEqual(len(slot.prompts), 1)
+            # What the triage turn did: moved the item into an acting phase.
+            _item(self.root, crew["id"], 12, phase="addressing-review")
+            await cr.watchdog_cycle(state, OWNER, REPO, [crew], self.root)
+        self.assertEqual(slot.model, self.WORK)
+        self.assertEqual(len(slot.prompts), 2)
+        self.assertIn("[crew wake: an item needs the work model]", slot.prompts[-1])
+
+    async def test_a_pass_with_nothing_newly_acting_dispatches_nothing(self):
+        crew = _crew(self.root, unattended=True, model=self.WORK, triage_model=self.TRIAGE)
+        state = self._State()
+        svc = _FakeNudge([_FakeLoop("nl_0", cr._slot_key(crew))])
+        with mock.patch.object(cr, "_autonudge_instance", lambda: svc):
+            slot = await cr.ensure_crew_session(state, OWNER, REPO, crew)
+            await cr.watchdog_cycle(state, OWNER, REPO, [crew], self.root)
+            await cr.watchdog_cycle(state, OWNER, REPO, [crew], self.root)
+        self.assertEqual(slot.model, self.TRIAGE)
+        self.assertEqual(slot.prompts, [])
 
     def test_the_nudge_tells_the_crew_how_a_triage_turn_ends(self):
         crew = _crew(self.root, triage_model=self.TRIAGE)

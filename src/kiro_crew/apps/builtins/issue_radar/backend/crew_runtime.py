@@ -1437,8 +1437,20 @@ async def watchdog_cycle(
                     await svc.update(loop.id, active=True)
         # The model the next idle-timer turn runs on: the loop fires on its own
         # clock, and this pass is what keeps the slot's model in step with the
-        # ledger between wakes.
-        await _apply_turn_model(state, slot, owner, repo, crew, root)
+        # ledger between wakes. A triage turn that moved an item into an acting
+        # phase is ESCALATED: the work-model turn is dispatched below rather than
+        # left for the idle timer, so a red CI found on a cheap turn is acted on
+        # within one poll, not one idle gap.
+        escalate = False
+        turn_items = await _turn_model_items(slot, owner, repo, crew, root)
+        if turn_items is not None:
+            before = getattr(slot, "model", "") or ""
+            moved = crew_model.apply_turn_model(state, slot, crew, turn_items)
+            escalate = (
+                moved
+                and before == crew_model.triage_model(crew)
+                and crew_model.has_acting_item(turn_items)
+            )
         # The pass itself awaits — the grant, the launch, the re-arm — so read once
         # more and undo it if the operator stopped the crew while it ran.
         # ``revoke_crew_execution`` is the exact inverse of what this body just
@@ -1455,6 +1467,12 @@ async def watchdog_cycle(
             # grant, never through a copy of half its predicate -- and through the
             # generation check, so a stop landing inside the hop wins.
             await _reconcile_trust(state, slot, current)
+            if escalate:
+                # Through the wake, so the escalated turn gets every check a
+                # signal's turn does: liveness re-read, trust, the mid-turn drop.
+                await wake_crew(
+                    state, owner, repo, current, "an item needs the work model", root, key
+                )
 
 
 def revoke_crew_grants(state: Any) -> int:

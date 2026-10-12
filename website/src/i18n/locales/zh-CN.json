@@ -2494,7 +2494,7 @@
             "submit_edit": "保存更改",
             "title_create": "新建小队",
             "title_edit": "编辑小队",
-            "triage_model_hint": "只检查队列的轮次使用的更便宜模型。进行中的工作使用“模型”。",
+            "triage_model_hint": "用更便宜的模型检查有没有新工作，一旦某个 issue 需要处理就切换到上方的“模型”。徽标表示各模型的积分成本。关闭：始终使用上方的“模型”。",
             "triage_model_label": "分诊模型",
             "triage_model_off": "关闭",
             "unattended_hint": "按名额授予信任，每个周期重新确认。关闭时，它会直接上报，而不是卡在批准提示上。",
@@ -2572,7 +2572,8 @@
             "slots_free_other": "还有 {{count}} 个名额空闲",
             "state_idle": "空闲",
             "state_paused": "已暂停",
-            "triage_model_unavailable": "此账户无法使用分诊模型 {{model}}，因此每一轮都使用工作模型。",
+            "triage_model_change": "更改分诊模型",
+            "triage_model_unavailable": "此账户无法使用 {{model}}，因此这个小队每一轮都使用“模型”（{{workModel}}）。请选择其他分诊模型，或将其关闭。",
             "work_log": "工作日志",
             "work_log_hint": "高亮显示最近 24h"
           },

@@ -2582,7 +2582,7 @@
             "submit_edit": "변경 사항 저장",
             "title_create": "새 크루",
             "title_edit": "크루 편집",
-            "triage_model_hint": "대기열만 확인하는 턴에 쓰는 더 저렴한 모델입니다. 진행 중인 작업은 ‘모델’에서 실행됩니다.",
+            "triage_model_hint": "새 작업이 있는지 더 저렴한 모델로 확인하고, 이슈에 작업이 필요해지면 바로 위의 ‘모델’로 전환합니다. 배지는 각 모델의 크레딧 비용입니다. 끄기: 항상 위의 ‘모델’을 사용합니다.",
             "triage_model_label": "분류 모델",
             "triage_model_off": "끄기",
             "unattended_hint": "슬롯별 신뢰 설정으로, 매 사이클마다 다시 부여됩니다. 끄면 승인 창에서 멈춰 있지 않고 에스컬레이션합니다.",
@@ -2660,7 +2660,8 @@
             "slots_free_other": "남은 슬롯 {{count}}개",
             "state_idle": "유휴",
             "state_paused": "일시 중지",
-            "triage_model_unavailable": "분류 모델 {{model}}을(를) 이 계정에서 사용할 수 없어 모든 턴을 작업 모델에서 실행합니다.",
+            "triage_model_change": "분류 모델 변경",
+            "triage_model_unavailable": "{{model}}을(를) 이 계정에서 사용할 수 없어 이 크루는 모든 턴을 ‘모델’({{workModel}})에서 실행합니다. 다른 분류 모델을 고르거나 끄세요.",
             "work_log": "작업 기록",
             "work_log_hint": "최근 24시간 강조"
           },

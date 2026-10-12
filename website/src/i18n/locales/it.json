@@ -2598,7 +2598,7 @@
             "submit_edit": "Salva le modifiche",
             "title_create": "Nuova crew",
             "title_edit": "Modifica la crew",
-            "triage_model_hint": "Un modello più economico per i turni che controllano solo la coda. Il lavoro attivo usa Modello.",
+            "triage_model_hint": "Cerca nuovo lavoro con un modello più economico e passa al Modello qui sopra appena una issue richiede lavoro. I badge mostrano il costo in crediti di ogni modello. Disattivato: sempre il Modello qui sopra.",
             "triage_model_label": "Modello di triage",
             "triage_model_off": "Disattivato",
             "unattended_hint": "Fiducia per singolo slot, ristabilita a ogni ciclo. Se disattivata, la crew passa in escalation invece di restare ferma su una richiesta di approvazione.",
@@ -2678,7 +2678,8 @@
             "slots_free_other": "{{count}} slot liberi",
             "state_idle": "inattiva",
             "state_paused": "in pausa",
-            "triage_model_unavailable": "Il modello di triage {{model}} non è disponibile per questo account, quindi ogni turno usa il modello di lavoro.",
+            "triage_model_change": "Cambia modello di triage",
+            "triage_model_unavailable": "{{model}} non è disponibile per questo account, quindi la crew usa il Modello ({{workModel}}) a ogni turno. Scegli un altro modello di triage o disattivalo.",
             "work_log": "Registro di lavoro",
             "work_log_hint": "ultime 24h evidenziate"
           },

@@ -14,9 +14,11 @@ an acting phase itself, through the ledger write, so the cheap turn's one decisi
 
 THE SWITCH LANDS BETWEEN TURNS, never inside one. :func:`apply_turn_model` writes
 ``slot.model`` and arms the slot's deferred session reset, which the next turn
-consumes before it acquires a session. That is the path a queued
-``session_set_model`` pick takes, so the conversation resumes on the new model
-rather than starting over. A running turn keeps the model it started on.
+consumes before it acquires a session. The deferral checks and the reset arming
+are ``session_control``'s own (``model_switch_deferred``,
+``arm_model_switch_reset``), the ones a queued ``session_set_model`` pick goes
+through, so the conversation resumes on the new model rather than starting over.
+A running turn keeps the model it started on.
 
 AN UNUSABLE TRIAGE MODEL FALLS BACK, VISIBLY. The record's id is shape-checked on
 write; whether the account can run it is answered by the session that starts on
@@ -32,7 +34,7 @@ import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from kiro_crew.dashboard.chat_utils import effective_session_key
+from kiro_crew.dashboard.session_control import arm_model_switch_reset, model_switch_deferred
 
 from . import crew_store
 
@@ -123,23 +125,6 @@ def _note_session_verdict(crew: Mapping[str, Any], slot: Any) -> None:
         _withheld.pop(crew_id, None)
 
 
-def _arm_reset(state: Any, slot: Any) -> None:
-    """Make the next turn start on ``slot.model`` instead of the live session's.
-
-    Armed only when a session can still be on the old model -- one registered, or
-    an eager spawn in flight that may register one. With neither, the next turn
-    cold-starts on the new model and a reset would only tear that session down.
-    """
-    sessions = getattr(state, "sessions", None)
-    get_provider = getattr(sessions, "get_provider", None)
-    if not callable(get_provider):
-        return
-    key = effective_session_key(slot)
-    eager = getattr(slot, "_eager_spawn_task", None)
-    if get_provider(key) is not None or (eager is not None and not eager.done()):
-        slot._pending_reset_history_key = getattr(slot, "_pending_reset_history_key", None) or key
-
-
 def apply_turn_model(
     state: Any,
     slot: Any,
@@ -150,13 +135,14 @@ def apply_turn_model(
 
     SYNCHRONOUS on purpose: the running check and the writes happen with no
     suspension between them, so a turn cannot start in the middle. A running slot
-    and a model-picker transaction in flight are both left alone; the next call
-    decides again.
+    is left alone, and so is every case ``model_switch_deferred`` names -- the
+    deferrals a queued ``session_set_model`` pick takes, through the same helper,
+    as the reset is armed through the same ``arm_model_switch_reset``. The next
+    call decides again.
     """
     if slot is None or getattr(slot, "running", False):
         return False
-    lock = getattr(slot, "_model_pick_lock", None)
-    if lock is not None and lock.locked():
+    if model_switch_deferred(state, slot):
         return False
     slot_key = str(getattr(slot, "key", "") or "")
     current = getattr(slot, "model", "") or ""
@@ -180,7 +166,7 @@ def apply_turn_model(
         # Counted as a deliberate pick so the model-fallback restore does not
         # undo it.
         slot._model_pick_gen += 1
-    _arm_reset(state, slot)
+    arm_model_switch_reset(state, slot)
     slot._dirty = True
     logger.info(
         "issue-radar crew %s: next turn runs on %s",

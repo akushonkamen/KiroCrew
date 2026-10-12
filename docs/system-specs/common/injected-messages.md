@@ -423,8 +423,8 @@ is a host deny. Per site:
   permits, never a sanctioned alternative.
 - `_approve`'s audit-or-deny arm, when the SEL row an unattended approval
   requires cannot be written -- the new `audit_unavailable` cause: the host
-  could not record the call, so it refused rather than run it unaudited;
-  nothing judged the action, and one retry is reasonable. Distinct from
+  could not record the call, so it refused rather than run it unaudited; the
+  call was approved, so this is a host fault and one retry is reasonable. Distinct from
   `hook_error`, which would send the model looking at a gate that never ran.
 
 `test_handlers_auto_improvement_deny_notice.py` enumerates every `reject_tool(`
@@ -492,6 +492,48 @@ subagent run it drives each host deny above, the gateway approver's no and a
 `turn_limit` bail, all with a provider double recording steer/reject order.
 `test_tool_permission.py` drives every approver's no and both bails through the
 subagent's own ladder, and pins the ladder's order and its cause rule.
+
+**The CLI chat, the webhook turn, the reviewer pool and the auto-title turn
+steer the same notice.** Each reuses `llm_helpers._steer_host_deny`, audit →
+steer → reject:
+
+- `kirocrew chat` (`cli_chat.py`) refuses every host deny through ONE funnel,
+  `_refuse_host_deny`, whose `cause=` and `reason=` keywords are the per-site
+  verdict; the terminal notice each site prints afterwards is the person's, the
+  steered notice is the model's. The PreToolUse gate's deny — `policy`, with the
+  gate's reason; a subagent request without verifiable security context, and a
+  call whose command or tool identity cannot be verified — `policy`; the gate
+  raising — `hook_error`; a prompt that cannot be opened, rendered or read, and
+  a `-m` / no-terminal run that cannot ask — `approval_undeliverable`; an
+  approval whose audit-or-deny write fails — `audit_unavailable`. The person's
+  own no at the prompt is the one bare reject: there the generic wording is the
+  truth.
+- The webhook agent turn (`dashboard/handlers/hooks.py`) has no person
+  attached, so every deny is the host's. The cause follows the SEL `error` code
+  the deny records (`_WEBHOOK_DENY_NOTICE`): a hook `deny` — `policy`, with the
+  hook's reason; the gate raising — `hook_error`; no hook gate, a verdict that
+  would ask a person, a subagent request without verifiable context, and a
+  withheld name grant — `surface_policy`; an auto-approve whose audit fails —
+  `audit_unavailable`.
+- The code-review-sage reviewer pool (`sage_lib/review_pool.py`): the
+  permission floor's refusal — `policy`, with its reason. The standalone
+  fallback, which has no helper, rejects as before.
+- The auto-title turn (`messaging/auto_title.py`) is tool-free by contract; its
+  one reject is `surface_policy`.
+
+`test_surface_deny_notice_sites.py` finds every `reject_tool(` on the four
+surfaces by AST, gives each a verdict (steered, or the CLI's one user
+denial), and drives the CLI and auto-title denies with a provider double
+recording steer/reject order; the webhook and reviewer denies are driven beside
+their own harnesses (`test_webhook_permission_requests.py`, the app's
+`test_review_pool.py`).
+
+The ACP transport's own refusals (`acp/client.py`, `acp/session_handle.py`)
+sit below every surface and steer nothing: the security floor inside
+`approve_tool` backstops a surface that approved, the agent-spec restrictions a
+backend cannot express natively are enforced before any surface sees the
+request, and a stranded request drained before a new turn has no turn in flight
+to steer into.
 
 The recovery classification for the last two rows of the marker table above
 is **structural**: the queue entry

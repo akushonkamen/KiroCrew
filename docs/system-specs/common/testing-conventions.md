@@ -44,6 +44,13 @@ promise-sleep, `waitForTimeout`); a deliberate one says why with
   level. That deadline is a lost-run bound (D7), half the test's timeout by default. An
   absence assertion waits on a positive signal first (the waiter registered, the
   product's own tick counter reached N), or it passes for the trivial reason.
+  Wait on signals, not clocks: await the event, future or coroutine the code emits
+  (`await_until`; `LoopHop` for a hook that must run a coroutine on the loop from an
+  executor thread), and a ceiling of 30 s or more only names a hang -- a
+  `wait_for(..., timeout=2)`, a `.result(timeout=5)` or a poll of N short sleeps bets
+  on the runner's speed, and `test/test_wait_discipline_ratchet.py` holds each test
+  file to the number of those it already has (a renamed file keeps its line under its
+  new path: `python test/test_wait_discipline_ratchet.py --move OLD NEW`).
   [Class 2](#2-wall-clock-races).
 - **D2. One clock, injected or frozen at the seam the code reads.** Replace the module's
   own `time` / `datetime` name with a `ManualClock` (`kiro_crew.testing.clock`, or the

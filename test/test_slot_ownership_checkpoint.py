@@ -23,7 +23,6 @@ import errno
 import json
 import re
 import threading
-import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -42,6 +41,7 @@ from kiro_crew.dashboard.slot_ownership import (
     slot_route_policy,
 )
 from kiro_crew.dashboard.state import SlotOrigin, _ChatSlot
+from kiro_crew.testing.wait import LoopHop
 
 APP = "crew-keyboard"
 _GRANT = "kiro_crew.apps.permissions.app_can_manage_session_approvals"
@@ -50,59 +50,6 @@ _FAMILY_PREFIX = "/api/chat/slots/{"
 #: Header the sweep's identity stand-in reads: absent is no claim at all, "-" is
 #: the dashboard user's empty claim, anything else is that app's claim.
 _CALLER = "X-Test-Caller"
-
-#: Lost-run ceiling for a hook's hop onto the event loop, not a race to tune. The
-#: interleaving hooks below block an executor thread until the loop has finished
-#: real durable work -- a session delete is a SQLite commit, a WAL checkpoint, an
-#: fsync and sidecar unlinks; a save-and-close is a locked transcript rewrite.
-#: MEASURED: 0.03 s per call at ``-n 4`` on a quiet 32-core Linux host (the repeats
-#: in the pull request); on CI the hop has only ever been seen truncated, at the
-#: former 5 s bound, on ``Backend Tests (Windows) (2)`` (runs 38123311632 and
-#: 38145187438), so the Windows worst case is "over 5 s", not a number. 60 s is
-#: over 10x the truncated reading and half the suite's 120 s ``--timeout``, so a
-#: hop that never lands fails here by name instead of killing the xdist worker.
-_LOOP_HOP_LOST_RUN_SECS = 60.0
-
-
-class _LoopHop:
-    """Run loop-side coroutines from an off-loop hook, and fail the TEST on a hang.
-
-    A hook under test calls :meth:`run` while the handler awaits the hook off the
-    loop. An exception raised inside the hook reaches aiohttp, not pytest: a
-    ``TimeoutError`` becomes a bodiless 504 and anything else a 500, so the test
-    would read a status instead of a cause. So an expired ceiling is recorded
-    here with the elapsed time and the last step the coroutine noted, the hook
-    still raises (the handler must not continue as if the hop landed), and the
-    test calls :meth:`check` right after its request to fail on that record.
-    """
-
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
-        self.steps: list[str] = []
-        self.failure = ""
-
-    def note(self, step: str) -> None:
-        """Record progress from inside the coroutine, for the failure message."""
-        self.steps.append(step)
-
-    def run(self, coro, what: str):
-        started = time.monotonic()
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        try:
-            return future.result(timeout=_LOOP_HOP_LOST_RUN_SECS)
-        except TimeoutError:
-            future.cancel()
-            last = self.steps[-1] if self.steps else "nothing noted yet"
-            self.failure = (
-                f"{what} was still pending on the loop after "
-                f"{time.monotonic() - started:.1f}s (lost-run ceiling "
-                f"{_LOOP_HOP_LOST_RUN_SECS:.0f}s); last step: {last}"
-            )
-            raise AssertionError(self.failure) from None
-
-    def check(self) -> None:
-        """Fail by name if a hop expired; call it before reading the response."""
-        assert not self.failure, self.failure
 
 
 @pytest.fixture
@@ -908,7 +855,7 @@ class TestTranscriptOwnershipWithoutALiveSlot:
         assert not await asyncio.to_thread(log.has_log, destination_key)
         loop = asyncio.get_running_loop()
         loop_thread = threading.get_ident()
-        hop = _LoopHop(loop)
+        hop = LoopHop(loop)
         before = {}
         load_cfg = chat_handlers._load_restore_cfg
 
@@ -965,7 +912,7 @@ class TestTranscriptOwnershipWithoutALiveSlot:
         )
         loop = asyncio.get_running_loop()
         loop_thread = threading.get_ident()
-        hop = _LoopHop(loop)
+        hop = LoopHop(loop)
         reservations = []
         read_owner = chat_handlers.transcript_acquisition_reason
 
@@ -1071,7 +1018,7 @@ class TestTranscriptOwnershipWithoutALiveSlot:
         await asyncio.to_thread(
             log.update_metadata, source_key, {"app": APP, "closed": True, "closed_at": 1.0}
         )
-        hop = _LoopHop(asyncio.get_running_loop())
+        hop = LoopHop(asyncio.get_running_loop())
         read_owner = chat_handlers.transcript_acquisition_reason
         published = []
 
@@ -1878,7 +1825,7 @@ class TestModeRereadsTheGrantAfterTheBody:
     @pytest.mark.asyncio
     async def test_a_slot_replaced_during_the_grant_read_is_not_trusted(self, state) -> None:
         state.get_or_create_slot("shared", app=APP)
-        hop = _LoopHop(asyncio.get_running_loop())
+        hop = LoopHop(asyncio.get_running_loop())
         replacement = []
         calls = []
 

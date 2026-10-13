@@ -304,13 +304,20 @@ class SkillUsageLedger:
         if timer is not None:
             timer.cancel()
         self.flush()
+        # The flush above was the shutdown write, so the hook is redundant from
+        # here on — and a registration pins this ledger for the whole process, so
+        # a host that closes one loader per call (the unsigned MCP fallback,
+        # mcp_tools/skills.py) would pin one per call on a long-running gateway.
+        # An unclosed ledger keeps its hook: that registration IS its exit path.
+        atexit.unregister(self._flush_at_exit)
 
     def _flush_at_exit(self) -> None:
         """``atexit`` hook: last-chance flush for an exit that skips ``close``.
 
         Interpreter shutdown does not wait for daemon threads, so the debounced
         flush thread dies with the process — anything still dirty would be lost.
-        After a ``close`` the ledger is clean and this writes nothing.
+        ``close`` unregisters this hook after its own flush, so a closed ledger
+        never reaches it and stays collectable.
         """
         self.flush()
 

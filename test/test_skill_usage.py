@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -258,3 +260,27 @@ class TestShutdownFlush:
         led.record("x")
         led._flush_at_exit()  # the interpreter-exit hook, registered in __init__
         assert _ledger(tmp_path).score("x")[0] == 1.0
+
+    def test_close_releases_the_atexit_hook(self, tmp_path):
+        # __init__ registers one exit hook per ledger, and the registration pins
+        # the ledger for the whole process. A host that closes one loader per
+        # call — the unsigned MCP fallback (mcp_tools/skills.py) — would pin one
+        # ledger per call on a long-running gateway, so close() must release its
+        # hook. An unclosed ledger keeps its: that registration IS its exit
+        # path, which is the design.
+        unclosed = _ledger(tmp_path)
+        unclosed_ref = weakref.ref(unclosed)
+        del unclosed
+        gc.collect()
+        assert (
+            unclosed_ref() is not None
+        ), "precondition: an unclosed ledger stays pinned by its exit hook"
+
+        closed = _ledger(tmp_path)
+        closed_ref = weakref.ref(closed)
+        closed.close()  # the shutdown flush; the hook is redundant from here on
+        del closed
+        gc.collect()
+        assert (
+            closed_ref() is None
+        ), "a close()d ledger must be collectable, not pinned by its exit hook"

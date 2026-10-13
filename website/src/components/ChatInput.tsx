@@ -222,6 +222,7 @@ function ChatInput({
   hiddenCommands,
   slotApprovalChrome = true,
   promptOptimizer = true,
+  inlineToolbarWhenEmpty = false,
   collapsible = false,
   connected = true,
   onOptimizeResult,
@@ -589,6 +590,14 @@ function ChatInput({
    *  refs-only composer therefore keeps the hold bar while the send button is
    *  live, which is correct for both. */
   const composerHasDraft = !!value.trim() || pendingFiles.length > 0 || hasQuote
+  /* #19608: single-row idle layout, opt-in (`inlineToolbarWhenEmpty`). An EMPTY
+   * draft (text, files, refs, quote all absent) dissolves the bottom icon row
+   * onto the textarea's line; anything typed expands back to the two rows. The
+   * collapsed bar and the manual-resize path own the box's geometry in their
+   * states, so this yields to both rather than fighting them — same reason the
+   * terminal surface is excluded (its toolbar row is load-bearing). */
+  const inlineToolbar = inlineToolbarWhenEmpty && !composerCollapsed && manualHeight === null && !terminal.active &&
+    !value.trim() && pendingFiles.length === 0 && pendingSessions.length === 0 && !hasQuote
   const {
     transcribeInFlight, transcribingIsHonest, micHeldElsewhere, micBlocked, micOwnerTitle, micHeldElsewhereLabel,
     setHoldTarget, touchPtt, voiceHoldMode, micIsModeSwitch, voiceSettling, textareaParked, toggleVoiceMode, micLabel, holdBarLabel,
@@ -943,7 +952,8 @@ function ChatInput({
       <div
         data-testid="input-wrapper"
         ref={wrapperRef}
-        className={`@container/composer ${hasApproval ? 'rounded-b-2xl rounded-t-none' : 'rounded-2xl'} relative transition-colors overflow-hidden ${manualHeight !== null ? 'flex flex-col min-h-0' : ''} ${(memoryMode === 'incognito' || memoryMode === 'temporary') ? 'border-2' : 'border'} bg-transparent ${memoryMode === 'temporary' ? 'border-aim' : memoryMode === 'incognito' ? 'border-warn' : 'border-transparent'}`}
+        className={`@container/composer ${hasApproval ? 'rounded-b-2xl rounded-t-none' : 'rounded-2xl'} relative transition-colors overflow-hidden ${manualHeight !== null ? 'flex flex-col min-h-0' : ''} ${inlineToolbar ? 'flex flex-row items-center gap-1' : ''} ${(memoryMode === 'incognito' || memoryMode === 'temporary') ? 'border-2' : 'border'} bg-transparent ${memoryMode === 'temporary' ? 'border-aim' : memoryMode === 'incognito' ? 'border-warn' : 'border-transparent'}`}
+        data-inline-toolbar={inlineToolbar ? 'true' : 'false'}
 
         data-tree-drop-active={treeDrop.state === 'accept' ? 'true' : undefined}
         data-tree-drop-refused={treeDrop.state === 'refuse' ? 'true' : undefined}
@@ -1028,7 +1038,7 @@ function ChatInput({
             className="mb-1 px-1"
           />
         )}
-        <div className={`relative ${showDictation || voiceHoldMode ? 'sr-only' : ''} ${manualHeight !== null ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+        <div data-inline-slot={inlineToolbar ? 'center' : undefined} className={`relative ${showDictation || voiceHoldMode ? 'sr-only' : ''} ${manualHeight !== null ? 'flex-1 min-h-0 flex flex-col' : ''} ${inlineToolbar ? 'order-2 flex-1 min-w-0' : ''}`}>
         {/* The staged quote sits inside the text area, above the caret: the
             quoted message is the first thing the reply says, so it is drawn
             where the reply is written rather than in the strips above (those
@@ -1137,8 +1147,8 @@ function ChatInput({
         <PromptLengthNotice value={value} blocks={pasteBlocks} contextWindowTokens={contextWindowTokens} confirmPending={overLimitPending} />
 
         {/* Bottom icon row */}
-        <div className={`flex items-center justify-between px-2.5 pb-2 pt-0.5${terminal.active ? ' flex-wrap gap-y-1' : ''}`}>
-          <div className="flex items-center gap-0.5 min-w-0">
+        <div data-testid="composer-toolbar-row" className={`flex items-center justify-between px-2.5 pb-2 pt-0.5${terminal.active ? ' flex-wrap gap-y-1' : ''}${inlineToolbar ? ' contents' : ''}`}>
+          <div data-inline-slot={inlineToolbar ? 'left' : undefined} className={`flex items-center gap-0.5 min-w-0${inlineToolbar ? ' order-1 shrink-0' : ''}`}>
             <AttachMenu plus={plus} onUploadFiles={onUploadFiles} uploading={uploading} onCancelUpload={onCancelUpload} directFilePicker={directFilePicker} collapsible={collapsible} fileInputId={fileInputId} openPicker={openPicker} isMac={isMac} isMobile={isMobile} onScreenshot={onScreenshot} collapseMenuRow={collapseMenuRow} typedCommandMenus={typedCommandMenus && !terminal.active} onFileSelect={terminal.active ? undefined : onFileSelect} />
             {directFilePicker && collapsible && (
               /* The repo's own overflow mechanism, not a second spelling of it.
@@ -1242,7 +1252,7 @@ function ChatInput({
               <ApprovalModePicker mode={approvalMode} slotKey={activeSlot || ''} remote={approvalModeRemote} compact onPicked={focusComposerAfterPick} openSignal={approvalPickerSignal} nudge={approvalNudgeActive} onNudgeDismiss={dismissApprovalNudge} onNudgeHide={hideApprovalNudge} />
             )}
           </div>
-          <div className={`flex items-center gap-1 shrink-0${terminal.active ? ' ml-auto max-w-full justify-end [&>button]:shrink-0' : ''}`}>
+          <div data-inline-slot={inlineToolbar ? 'right' : undefined} className={`flex items-center gap-1 shrink-0${terminal.active ? ' ml-auto max-w-full justify-end [&>button]:shrink-0' : ''}${inlineToolbar ? ' order-3' : ''}`}>
             {onVoiceToggle && (
               <MicButton voiceHoldMode={voiceHoldMode} voiceRecording={voiceRecording} micIsModeSwitch={micIsModeSwitch} transcribeInFlight={transcribeInFlight} micHeldElsewhere={micHeldElsewhere} micBlocked={micBlocked} toggleVoiceMode={toggleVoiceMode} onVoiceToggle={onVoiceToggle} onVoicePrewarm={onVoicePrewarm} disabled={disabled} optimizing={optimizing} micLabel={micLabel} />
             )}

@@ -25,6 +25,12 @@ export type CrewComposerProps = Omit<ChatInputProps, (typeof SESSION_CHROME_PROP
 function CrewComposer(props: ChatInputProps) {
   const core: Record<string, unknown> = { ...props }
   for (const key of SESSION_CHROME_PROPS) delete core[key]
+  // A DM with one crewmate is not a prompt-optimization surface — the pop-out
+  // CrewChatWindow already turns the optimizer off, and this page was the last
+  // crewmate face still offering it (#19608). It also opts into the single-row
+  // idle layout: no session chips remain to justify a second toolbar row.
+  core.promptOptimizer = false
+  core.inlineToolbarWhenEmpty = true
   return <ChatInput {...(core as CrewComposerProps)} />
 }
 

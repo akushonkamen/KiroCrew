@@ -55,6 +55,10 @@ describe('CrewComposer', () => {
     expect(got.placeholder).toBe('Message oncall…')
     // The raw agent alias still feeds the slash-command / skills lookup.
     expect(got.agentName).toBe('oncall')
+    // A crewmate DM is not a prompt-optimization surface (matches the pop-out
+    // CrewChatWindow), and it opts into the single-row empty layout (#19608).
+    expect(got.promptOptimizer).toBe(false)
+    expect(got.inlineToolbarWhenEmpty).toBe(true)
     for (const key of SESSION_CHROME_PROPS) expect(got).not.toHaveProperty(key)
   })
 

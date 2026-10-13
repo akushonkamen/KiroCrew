@@ -444,6 +444,19 @@ export interface ChatInputProps {
    */
   promptOptimizer?: boolean
   /**
+   * Single-row idle layout (#19608): with an EMPTY draft the bottom icon row
+   * dissolves onto the same line as the textarea — `+` left, textarea middle,
+   * mic/send right — so an idle composer is one 44px row instead of a textarea
+   * stacked over a near-empty toolbar. Any draft content (text, files, refs,
+   * quote) expands back to today's two rows; clearing collapses again.
+   *
+   * Opt-in: only hosts that strip the session chrome (the crewmate DM) set it,
+   * so the ordinary chat composer, SideChat and CrewChatWindow are untouched.
+   * Inert while the composer is collapsed or manually resized — those paths
+   * own the box's geometry and must not fight this one.
+   */
+  inlineToolbarWhenEmpty?: boolean
+  /**
    * The user-driven collapse: the "put the message box away while I read" entry
    * point, the bar that replaces it, and the persisted preference.
    *

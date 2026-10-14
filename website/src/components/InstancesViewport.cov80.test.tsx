@@ -199,7 +199,12 @@ describe('InstancesViewport relay listener', () => {
         options: { body: 'Response ready', tag: 'cd-1:kirocrew-chat-done:slot-9', silent: false },
       })
       const items = store.getState().notifications.items
-      expect(items.some(n => n.kind === 'turn' && n.title === 'Zzq One: Ship blog' && n.body === 'Response ready')).toBe(true)
+      const row = items.find(n => n.kind === 'turn')
+      expect(row?.title).toBe('Zzq One: Ship blog')
+      expect(row?.body).toBe('Response ready')
+      // Browser-owned: the toast hook must skip it (the banner above is this
+      // event's one toast) and a refetch must carry the row over.
+      expect(row?.clientOnly).toBe(true)
     })
 
     it('a relayed note that is not a turn-done adds no feed row', async () => {

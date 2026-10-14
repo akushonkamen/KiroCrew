@@ -563,13 +563,17 @@ export default function InstancesViewport({ macInset = false }: { macInset?: boo
         // Every other relayed kind is out of scope here: approvals and bell
         // notes banner off paths that own their own feed rows. The title is the
         // same crew-prefixed string the OS banner carries, so the bell names
-        // the crew too.
+        // the crew too. The row is `clientOnly` — no server copy backs it, so
+        // the toast hook must skip it (the banner posted below is this event's
+        // one toast; counting the row too would build a second, generic one)
+        // and a refetch must carry it over instead of dropping it.
         if (note.tag.startsWith(TURN_DONE_TAG_PREFIX)) {
           dispatch(addNotification({
             kind: 'turn',
             title: `${name}: ${note.title}`,
             body: note.body,
             ts: String(Date.now()),
+            clientOnly: true,
           }))
         }
         // Clicking the banner brings the named crew forward, not whichever tab

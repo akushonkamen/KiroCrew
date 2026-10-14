@@ -19,7 +19,6 @@ message wording at the call site.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import inspect
 import json
 import threading
@@ -42,7 +41,7 @@ from kiro_crew.acp.harness import opencode as opencode_mod
 from kiro_crew.acp.harness.base import SpawnContext
 from kiro_crew.acp_backends import ACP_BACKEND_OPENCODE, Routing, routing_for
 from kiro_crew.acp_tool_gate import seeded_setting_issue
-from kiro_crew.agent_sdk.backends import ACP_BACKEND_GOOSE, launch_for
+from kiro_crew.agent_sdk.backends import launch_for
 
 #: A read-back argv as the spawn arm hands it over: already sandbox-wrapped there,
 #: so these tests pass one through unchanged rather than reconstructing it.
@@ -635,15 +634,7 @@ class _OpencodeLaunchRig:
     CLEANUP_VERSION = "/opt/run/kirocrew_sandbox_version"
     MODE = "standard"
 
-    def __init__(
-        self,
-        monkeypatch,
-        tmp_path,
-        *,
-        routing=("", ""),
-        probe_stdout=None,
-        version_cache=None,
-    ):
+    def __init__(self, monkeypatch, tmp_path, *, routing=("", ""), probe_stdout="1.19.0"):
         self.events: list[tuple] = []
         self.loop_thread: int | None = None
         self.plan = None
@@ -685,35 +676,22 @@ class _OpencodeLaunchRig:
         monkeypatch.setattr(opencode_mod, "wrap_argv_async", _wrap)
         monkeypatch.setattr(opencode_mod, "_verify_opencode_routing", _verify)
         monkeypatch.setattr(launch_mod, "_unlink_readback_launcher", _unlink)
-        # The version gate's seam. A rig that names no probe stdout pre-seeds the
-        # gate's cache with the in-range answer, so the launch's other tests do not
-        # start a second child; a rig that does starts the gate cold and answers the
-        # probe at the subprocess seam instead. A rig given a cache shares whatever
-        # an earlier rig's probe answered into it -- what one gateway's life looks
-        # like across two sessions -- and still answers any probe it does start.
-        # The caches are compared against None, not truthiness: an EMPTY cache is a
-        # cold gate, and the sharing is the identity of the dict.
-        if probe_stdout is None and version_cache is None:
-            monkeypatch.setattr(opencode_mod, "_opencode_version_majors", {self.BIN: 1})
-        else:
-            monkeypatch.setattr(
-                opencode_mod,
-                "_opencode_version_majors",
-                version_cache if version_cache is not None else {},
-            )
+        # The version gate's seam: every launch probes fresh (the gate holds no
+        # cache by design), so every rig answers the probe at the subprocess seam
+        # -- in range by default, a rig naming a different stdout to exercise the
+        # refusal.
+        assert probe_stdout is not None
 
-        if probe_stdout is not None:
+        class _Completed:
+            returncode = 0
+            stdout = probe_stdout
+            stderr = ""
 
-            class _Completed:
-                returncode = 0
-                stdout = probe_stdout
-                stderr = ""
+        def _run(argv, **kwargs):
+            _record("version_probe", list(argv))
+            return _Completed()
 
-            def _run(argv, **kwargs):
-                _record("version_probe", list(argv))
-                return _Completed()
-
-            monkeypatch.setattr(opencode_mod.subprocess_mod, "run", _run)
+        monkeypatch.setattr(opencode_mod.subprocess_mod, "run", _run)
 
     def run(self):
         """Resolve the plan on a fresh loop, noting the thread the loop runs on."""
@@ -1045,12 +1023,11 @@ def test_the_backend_declares_the_verified_mechanism() -> None:
 # ── The version gate ─────────────────────────────────────────────────────────
 
 
-def test_the_launch_row_names_the_tested_major() -> None:
-    """The pin is a fact of the launch row, which the gate reads -- not a constant
-    of its own that could drift from the table."""
-    assert launch_for(ACP_BACKEND_OPENCODE).tested_major == 1
-    # A row without a measured major is the no-gate spelling, not zero.
-    assert launch_for(ACP_BACKEND_GOOSE).tested_major is None
+def test_the_harness_names_the_tested_major() -> None:
+    """The pin is a fact of this harness's own module, beside the probe that reads
+    it -- the install advice in the launch table pins the same line."""
+    assert opencode_mod._OPENCODE_TESTED_MAJOR == 1
+    assert "opencode-ai@1" in launch_for(ACP_BACKEND_OPENCODE).install_command
 
 
 def _version_gate(monkeypatch, *, stdout="", returncode=0, raise_exc=None) -> dict:
@@ -1075,7 +1052,6 @@ def _version_gate(monkeypatch, *, stdout="", returncode=0, raise_exc=None) -> di
 
     monkeypatch.setattr(opencode_mod.subprocess_mod, "run", _run)
     monkeypatch.setattr(opencode_mod, "wrap_argv_async", _wrap)
-    monkeypatch.setattr(opencode_mod, "_opencode_version_majors", {})
     return calls
 
 
@@ -1090,15 +1066,28 @@ def _version_refusal(client: AcpClient, binary: str) -> tuple[str, str]:
     return asyncio.run(_go())
 
 
-def test_a_tested_major_passes_and_is_probed_once_per_binary(tmp_path, monkeypatch) -> None:
-    """In range: no refusal, and the next session's gate reads the cache rather
-    than starting the child again."""
+def test_a_tested_major_passes(tmp_path, monkeypatch) -> None:
+    """In range: no refusal, and the child the gate started is the wrapped
+    ``--version`` of the resolved binary."""
     calls = _version_gate(monkeypatch, stdout="1.19.0")
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
     assert calls["argv"] == ["/opt/run/launcher", "/opt/bin/opencode", "--version"]
+
+
+def test_the_gate_is_probed_fresh_on_every_launch(tmp_path, monkeypatch) -> None:
+    """No cache sits in front of this answer, on purpose.
+
+    A verdict keyed on the resolved path keeps reporting the OLD major after an
+    in-place upgrade puts a new binary behind the same path -- the gate would then
+    wave through the very launch it exists to refuse. So every launch probes
+    again, the same order of cost as the read-back child it precedes.
+    """
+    calls = _version_gate(monkeypatch, stdout="1.19.0")
+    client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
-    assert calls["probes"] == 1, "the gate re-probed a binary it had already measured"
+    assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
+    assert calls["probes"] == 2, "a second launch read a stale answer instead of probing"
 
 
 def test_an_untested_newer_major_refuses_and_names_both_lines(tmp_path, monkeypatch) -> None:
@@ -1111,9 +1100,9 @@ def test_an_untested_newer_major_refuses_and_names_both_lines(tmp_path, monkeypa
     assert "major 1" in issue
     assert OPENCODE_INSTALL_COMMAND in remedy
     assert _ENV_BIN in remedy
-    # The refusal is cached with the answer, so a retry cannot wear the gate down.
+    # And the answer is re-read next launch, so a retry wears nothing down.
     assert _version_refusal(client, "/opt/bin/opencode")[0]
-    assert calls["probes"] == 1
+    assert calls["probes"] == 2
 
 
 def test_an_older_major_refuses_too(tmp_path, monkeypatch) -> None:
@@ -1144,20 +1133,6 @@ def test_an_unreadable_answer_refuses_closed(tmp_path, monkeypatch, gate_kwargs)
     assert "did not report a readable version" in issue
     assert OPENCODE_INSTALL_COMMAND in remedy
     assert calls["probes"] == 1
-
-
-def test_a_row_without_a_tested_major_does_not_probe(tmp_path, monkeypatch) -> None:
-    """``tested_major: None`` is the no-gate spelling: a row with no measured line
-    has nothing for the gate to enforce, and the gate must not invent one."""
-    calls = _version_gate(monkeypatch, stdout="9.9.9")
-    monkeypatch.setattr(
-        opencode_mod,
-        "_OPENCODE_LAUNCH",
-        dataclasses.replace(launch_for(ACP_BACKEND_OPENCODE), tested_major=None),
-    )
-    client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
-    assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
-    assert calls["probes"] == 0
 
 
 def test_the_version_child_is_wrapped_like_the_read_back(monkeypatch, tmp_path) -> None:
@@ -1208,24 +1183,6 @@ def test_an_out_of_range_major_refuses_before_the_read_back(monkeypatch, tmp_pat
     names = rig.names()
     assert "wrap_readback" not in names, "the read-back child started behind a refused gate"
     assert "unlink_version" in names, "the probe's launcher artifact leaked on refusal"
-
-
-def test_a_cached_verdict_does_not_start_a_second_version_child(monkeypatch, tmp_path) -> None:
-    """The probe answers once per binary for the gateway's life, the same contract
-    the binary resolution it accompanies reports on: the second session reads the
-    cache and still runs its own read-back."""
-    cache: dict = {}
-    first = _OpencodeLaunchRig(
-        monkeypatch, tmp_path / "first", probe_stdout="1.19.0", version_cache=cache
-    )
-    first.run()
-    second = _OpencodeLaunchRig(
-        monkeypatch, tmp_path / "second", probe_stdout="1.19.0", version_cache=cache
-    )
-    second.run()
-    assert "wrap_version" in first.names()
-    assert "wrap_version" not in second.names()
-    assert "wrap_readback" in second.names(), "the second session still read its routing back"
 
 
 # ── A per-tool rule from a lower config source ───────────────────────────────

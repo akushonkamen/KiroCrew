@@ -60,13 +60,21 @@ OPENCODE_INSTALL_COMMAND = _OPENCODE_LAUNCH.install_command
 # way the ACP server itself resolves it. Reading it back is what separates this
 # harness's routing from a declared-but-unverified seed.
 _OPENCODE_CONFIG_READBACK_ARGS = ("debug", "config")
-# The flag that prints the resolved binary's own version. The launch reads it back
-# once per resolved binary and refuses a major outside the launch row's
-# ``tested_major`` BEFORE the read-back runs: the read-back's parser and the session
-# spawn are measured only against that major, and a PATH refresh onto another line
-# must refuse rather than let an unmeasured binary decide how the permission gate
-# reads.
+# The flag that prints the resolved binary's own version. Every launch reads it
+# back fresh and refuses a major outside ``_OPENCODE_TESTED_MAJOR`` BEFORE the
+# read-back runs: the read-back's parser and the session spawn are measured only
+# against that major, and a PATH refresh onto another line must refuse rather
+# than let an unmeasured binary decide how the permission gate reads.
 _OPENCODE_VERSION_ARGS = ("--version",)
+# The major line the whole launch has been measured against: the real-adapter
+# lane installs opencode-ai from a manifest pinned inside this major and drives
+# the spawn, the permission read-back and the MCP mount against it. The 2.x line
+# reworks the plugin API, the server API and the config file layout, and none of
+# that has been measured here -- so until those measurements are re-run against
+# a 2.x binary, the launch refuses one. Widen it only after re-measuring. It
+# lives beside the probe's argv -- the only code that reads it -- the way the pi
+# harness keeps its minimum version in its own module.
+_OPENCODE_TESTED_MAJOR = 1
 # The version child is bounded like the read-back: a binary that hangs on the
 # flag must refuse the launch, not stall the gateway loop that awaited it.
 _OPENCODE_VERSION_TIMEOUT_S = 15.0
@@ -89,7 +97,7 @@ def _opencode_version_remedy() -> str:
     return (
         f"Install a tested release with '{OPENCODE_INSTALL_COMMAND}', or set "
         f"{_OPENCODE_LAUNCH.bin_env_var} to a binary of major "
-        f"{_OPENCODE_LAUNCH.tested_major}."
+        f"{_OPENCODE_TESTED_MAJOR}."
     )
 
 
@@ -111,11 +119,13 @@ def _parse_opencode_major(version_output: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-#: Resolved binary path -> the major its version child reported, probed at most once
-#: per binary per gateway life -- the same cache-and-restart contract the binary
-#: resolution it accompanies reports on. A ``None`` VALUE is a probed-and-unreadable
-#: answer, not an unprobed state; an absent key is the unprobed one.
-_opencode_version_majors: dict[str, int | None] = {}
+#: Deliberately NO cache on this answer. The binary resolution next door caches per
+#: gateway life, and a verdict cached the same way -- keyed on the resolved path --
+#: would keep reporting the OLD major after an in-place upgrade put a new binary
+#: behind the same path: the gate would then wave through the very launch this
+#: check exists to refuse. The read-back below already starts one short-lived child
+#: per session; the probe is the same order of cost, paid for an answer that is
+#: always current.
 
 
 def _opencode_reported_major(session: ProcessSession, argv: list[str]) -> int | None:
@@ -168,46 +178,41 @@ async def _opencode_version_refusal(
     *,
     sandbox_mode: str,
     hidden: tuple[str, ...],
-    expose: Collection[str],
+    expose: tuple[str, ...],
 ) -> tuple[str, str]:
     """Refuse a resolved binary whose major is not the one this launch was measured
     against.
 
     Everything the launch does below this check -- the read-back that establishes
     the asking posture, and the session spawn that trusts it -- is measured only
-    against the launch row's ``tested_major``. A PATH refresh onto another line
-    would otherwise move the session onto it silently: the read-back may parse
-    shapes it was never tested against or refuse a session that is fine, and
-    neither failure names the upgrade that caused it.
+    against ``_OPENCODE_TESTED_MAJOR``. A PATH refresh onto another line would
+    otherwise move the session onto it silently: the read-back may parse shapes it
+    was never tested against or refuse a session that is fine, and neither failure
+    names the upgrade that caused it.
 
     Returns ``("", "")`` when the binary is in range, else the reason and the
-    remedy. Answered from the cache when this binary was already probed; the probe
-    child is wrapped in the same sandbox with the same mask as the read-back --
-    same binary, same trust level -- and runs off the loop like it.
+    remedy. Every launch probes fresh -- see the no-cache note at
+    ``_opencode_reported_major`` -- and the probe child is wrapped in the same
+    sandbox with the same mask as the read-back -- same binary, same trust level --
+    and runs off the loop like it.
     """
-    tested = _OPENCODE_LAUNCH.tested_major
-    if tested is None:
-        return "", ""
-    if opencode_bin in _opencode_version_majors:
-        major = _opencode_version_majors[opencode_bin]
-    else:
-        version_argv, cleanup = await wrap_argv_async(
-            [opencode_bin, *_OPENCODE_VERSION_ARGS],
-            mode=sandbox_mode,
-            strip_python_env=True,
-            extra_hidden_dirs=hidden,
-            extra_expose_files=expose,
-            _prepare=wrap_argv,
-        )
-        try:
-            major = await asyncio.to_thread(_opencode_reported_major, session, version_argv)
-        finally:
-            # The same contract as the read-back's artifact: wrap_argv leaves a
-            # launcher file the child consumes at exec, reclaimed as soon as the
-            # child has exited -- refusal paths included.
-            if cleanup:
-                await asyncio.to_thread(launch_mod._unlink_readback_launcher, cleanup)
-        _opencode_version_majors[opencode_bin] = major
+    tested = _OPENCODE_TESTED_MAJOR
+    version_argv, cleanup = await wrap_argv_async(
+        [opencode_bin, *_OPENCODE_VERSION_ARGS],
+        mode=sandbox_mode,
+        strip_python_env=True,
+        extra_hidden_dirs=hidden,
+        extra_expose_files=expose,
+        _prepare=wrap_argv,
+    )
+    try:
+        major = await asyncio.to_thread(_opencode_reported_major, session, version_argv)
+    finally:
+        # The same contract as the read-back's artifact: wrap_argv leaves a
+        # launcher file the child consumes at exec, reclaimed as soon as the
+        # child has exited -- refusal paths included.
+        if cleanup:
+            await asyncio.to_thread(launch_mod._unlink_readback_launcher, cleanup)
     if major == tested:
         return "", ""
     if major is None:
@@ -791,17 +796,17 @@ class OpencodeLaunch(ProcessAdapter):
             expose=expose,
         )
         if version_issue:
-            # Through the same channel as the routing refusal below: the refusal
-            # that reaches the operator is typed the same way, and the failed
-            # spawn's cleanup runs the same way with it.
-            try:
-                acp_tool_gate.enforce_runtime_routing(
-                    self.backend,
-                    version_issue,
-                    remedy=version_remedy,
-                )
-            except acp_tool_gate.ToolGateUnroutable as exc:
-                raise AcpToolGateUnroutable(str(exc)) from None
+            # Raised DIRECTLY as the ACP-layer type rather than through
+            # ``enforce_runtime_routing``: that wrapper frames every reason as
+            # "tool calls would not reach Kiro Crew's security gate", which this
+            # gate has not measured -- no routing read-back ran, only
+            # ``--version``. The refusal says what happened: the binary is
+            # outside the tested major, and everything below was never measured
+            # against it. Same type, so ``ensure_ready`` still catches it and the
+            # failed spawn's cleanup runs the same way with it.
+            raise AcpToolGateUnroutable(
+                f"{self.backend} launch refused: {version_issue}. {version_remedy}"
+            ) from None
         # The routing seed, and the READ-BACK that is what this harness's Routing
         # member promises. OFF-LOOP: the read-back spawns a short-lived child, and a
         # synchronous spawn on the gateway loop is the stall this path guards

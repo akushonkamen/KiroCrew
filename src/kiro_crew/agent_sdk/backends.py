@@ -2972,14 +2972,6 @@ class SelfServedLaunch:
     sentence is what stops the wrong install. It is appended to the shared not-found
     message rather than replacing it.
 
-    ``tested_major`` is the major version line this row's launch has been measured
-    against -- the spawn, the harness's own permission read-back and the MCP mount
-    together -- and ``None`` marks a row no version gate guards. It is a measured
-    fact rather than something the table can derive, which is why it is declared per
-    row: a harness whose launch refuses a binary outside its measured line names the
-    line here, and the harness's launch checks the resolved binary against it before
-    any child of that binary starts.
-
     Frozen because the table is module state every spawn reads: a mutation from one
     session would follow every session after it.
     """
@@ -2991,7 +2983,6 @@ class SelfServedLaunch:
     install_command: str
     protocol_version: int
     missing_hint: str
-    tested_major: int | None = None
 
     @property
     def spawn_label(self) -> str:
@@ -3029,19 +3020,11 @@ ACP_BACKEND_LAUNCH: Mapping[str, SelfServedLaunch] = {
         bin_env_var="OPENCODE_BIN",
         # Pinned to the tested major: the unpinned name installs the latest
         # release, which an operator following this advice after a 2.x release
-        # would then have every launch refuse (see ``tested_major``).
+        # would then have every launch refuse (the version gate in
+        # acp/harness/opencode.py names the line it measured).
         install_command="npm i -g opencode-ai@1",
         protocol_version=1,
         missing_hint="No adapter package is needed: this harness serves ACP itself.",
-        # The line the whole launch has been measured against: the real-adapter
-        # lane installs opencode-ai from a manifest pinned inside this major and
-        # drives the spawn, the permission read-back and the MCP mount against
-        # it. The 2.x line reworks the plugin API, the server API and the config
-        # file layout, and none of that has been measured here -- so until those
-        # measurements are re-run against a 2.x binary, the launch refuses one
-        # (the version gate in acp/harness/opencode.py). Widen this only after
-        # re-measuring.
-        tested_major=1,
     ),
     ACP_BACKEND_GOOSE: SelfServedLaunch(
         label="goose",

@@ -450,12 +450,13 @@ describe('ChatPage file-chip remove parity', { timeout: 15_000 }, () => {
     // query-key change, so right after the project changes the rows on screen
     // -- and the root they relativize against -- still belong to the OLD root,
     // with nothing on screen saying so. A click in that window used to insert
-    // the old-root-relative token into the new project's composer. Delay ONLY
-    // the '/repo/src' answer so the window is deterministic, then click
-    // `main.ts` the moment a row first appears: before the fix that row is
-    // slot-a's placeholder (red: `expected '@src/main.ts ' to contain
-    // '@main.ts'`); after the fix no row renders until the re-rooted answer
-    // lands, so the same click picks the real '/repo/src' row.
+    // the old-root-relative token into the new project's composer. HOLD BACK
+    // the '/repo/src' answer behind a deferred (never a timed sleep: the
+    // in-flight window is then exact, not a guess at how long the UI needs).
+    // While the answer is held: before the fix slot-a's bridged placeholder
+    // row is on screen (red: `queryByText('main.ts')` finds it), and clicking
+    // it inserts '@src/main.ts' into slot-b; after the fix no row renders
+    // until the re-rooted answer lands, so the click picks the real row.
     const store = makeStore('slot-a', [
       { key: 'slot-a', project: '/repo' },
       { key: 'slot-b', project: '/repo/src' },
@@ -471,8 +472,9 @@ describe('ChatPage file-chip remove parity', { timeout: 15_000 }, () => {
 
     const base = vi.mocked(api.fileSearch).getMockImplementation()
     try {
+      let releaseAnswer: (() => void) | undefined
       vi.mocked(api.fileSearch).mockImplementation(async (...args: Parameters<typeof api.fileSearch>) => {
-        if (args[1] === '/repo/src') await new Promise(r => setTimeout(r, 300))
+        if (args[1] === '/repo/src') await new Promise<void>(r => { releaseAnswer = r })
         return base!(...args)
       })
 
@@ -481,10 +483,16 @@ describe('ChatPage file-chip remove parity', { timeout: 15_000 }, () => {
 
       const taB = screen.getByLabelText('Message input') as HTMLTextAreaElement
       fireEvent.change(taB, { target: { value: '@mai' } })
-      // The FIRST 'main.ts' row on screen, clicked the instant it shows up --
-      // in the placeholder window that row still belongs to the OLD root.
-      const stale = await screen.findByText('main.ts', undefined, { timeout: 3000 })
-      fireEvent.mouseDown(stale)
+      // The re-rooted query is in flight and its answer is still held back.
+      await waitFor(() => expect(releaseAnswer).toBeDefined())
+      // Nothing may be on screen while it is held: pre-fix this is exactly
+      // where slot-a's bridged placeholder row shows up, and the click below
+      // would have hit it and inserted the OLD root's token.
+      expect(screen.queryByText('main.ts')).toBeNull()
+      releaseAnswer!()
+      // The FIRST 'main.ts' row after the answer lands belongs to the NEW root.
+      const row = await screen.findByText('main.ts', undefined, { timeout: 3000 })
+      fireEvent.mouseDown(row)
       // Whichever row answered, the inserted token must be the NEW root's
       // relative form of that same file.
       await waitFor(() => expect(taB.value).toContain('@main.ts'))

@@ -445,6 +445,54 @@ describe('ChatPage file-chip remove parity', { timeout: 15_000 }, () => {
     expect(taA2.value).toContain('@src/main.ts')
   })
 
+  it('a click on the first row after a re-root inserts the NEW root-relative token, even when the search is still in flight', async () => {
+    // The picker's `placeholderData` bridges the PREVIOUS payload across a
+    // query-key change, so right after the project changes the rows on screen
+    // -- and the root they relativize against -- still belong to the OLD root,
+    // with nothing on screen saying so. A click in that window used to insert
+    // the old-root-relative token into the new project's composer. Delay ONLY
+    // the '/repo/src' answer so the window is deterministic, then click
+    // `main.ts` the moment a row first appears: before the fix that row is
+    // slot-a's placeholder (red: `expected '@src/main.ts ' to contain
+    // '@main.ts'`); after the fix no row renders until the re-rooted answer
+    // lands, so the same click picks the real '/repo/src' row.
+    const store = makeStore('slot-a', [
+      { key: 'slot-a', project: '/repo' },
+      { key: 'slot-b', project: '/repo/src' },
+    ])
+    await renderPage(store)
+
+    const taA = screen.getByLabelText('Message input') as HTMLTextAreaElement
+    fireEvent.change(taA, { target: { value: '@mai' } })
+    const rowA = await screen.findByText('main.ts', undefined, { timeout: 3000 })
+    fireEvent.mouseDown(rowA)
+    await waitFor(() => expect(taA.value).toContain('@src/main.ts'))
+    await screen.findByLabelText('Remove')
+
+    const base = vi.mocked(api.fileSearch).getMockImplementation()
+    try {
+      vi.mocked(api.fileSearch).mockImplementation(async (...args: Parameters<typeof api.fileSearch>) => {
+        if (args[1] === '/repo/src') await new Promise(r => setTimeout(r, 300))
+        return base!(...args)
+      })
+
+      act(() => { store.dispatch(setActiveSlot('slot-b')) })
+      await waitFor(() => expect(screen.queryByLabelText('Remove')).not.toBeInTheDocument())
+
+      const taB = screen.getByLabelText('Message input') as HTMLTextAreaElement
+      fireEvent.change(taB, { target: { value: '@mai' } })
+      // The FIRST 'main.ts' row on screen, clicked the instant it shows up --
+      // in the placeholder window that row still belongs to the OLD root.
+      const stale = await screen.findByText('main.ts', undefined, { timeout: 3000 })
+      fireEvent.mouseDown(stale)
+      // Whichever row answered, the inserted token must be the NEW root's
+      // relative form of that same file.
+      await waitFor(() => expect(taB.value).toContain('@main.ts'))
+    } finally {
+      if (base) vi.mocked(api.fileSearch).mockImplementation(base)
+    }
+  })
+
   it('sending in one slot does not blank another slot\'s recorded file token (pickedFileTokens is not wiped wholesale)', async () => {
     // pickedFileTokens is a single map shared across every slot. Send used to
     // clear it wholesale (`pickedFileTokens.current = {}`), so sending in

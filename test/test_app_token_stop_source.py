@@ -85,9 +85,7 @@ def _fences(monkeypatch, state, *, events: list, compacting: bool = False) -> li
 
     monkeypatch.setattr("kiro_crew.dashboard.chat_handlers.deny_app_slot_access", _deny)
     # One session, resolved once: what the route authorizes is what it cancels.
-    monkeypatch.setattr(
-        "kiro_crew.dashboard.chat_handlers.effective_session_key", lambda slot: KEY
-    )
+    monkeypatch.setattr("kiro_crew.dashboard.chat_handlers.effective_session_key", lambda slot: KEY)
     monkeypatch.setattr("kiro_crew.dashboard.chat_handlers.own_session_key", lambda slot: KEY)
 
     lines: list[dict] = []
@@ -129,9 +127,7 @@ class TestAppTokenStopVia:
         _running(state.get_or_create_slot(SLOT))
         events: list = []
         lines = _fences(monkeypatch, state, events=events)
-        async with TestClient(
-            TestServer(_wire_route(state, app_name="mail-bot"))
-        ) as client:
+        async with TestClient(TestServer(_wire_route(state, app_name="mail-bot"))) as client:
             status, body = await _press(client)
 
         assert status == 200
@@ -164,9 +160,7 @@ class TestAppTokenStopVia:
         _running(state.get_or_create_slot(SLOT))
         events: list = []
         lines = _fences(monkeypatch, state, events=events, compacting=True)
-        async with TestClient(
-            TestServer(_wire_route(state, app_name="mail-bot"))
-        ) as client:
+        async with TestClient(TestServer(_wire_route(state, app_name="mail-bot"))) as client:
             status, body = await _press(client, force=True)
 
         assert status == 200
@@ -187,9 +181,7 @@ class TestAppTokenStopVia:
         _running(state.get_or_create_slot(SLOT))
         events: list = []
         lines = _fences(monkeypatch, state, events=events)
-        async with TestClient(
-            TestServer(_wire_route(state, app_name="mail-bot"))
-        ) as client:
+        async with TestClient(TestServer(_wire_route(state, app_name="mail-bot"))) as client:
             first = await _press(client)
             second = await _press(client)
 
@@ -204,16 +196,12 @@ class TestAppTokenStopVia:
 
 class TestAuthorizationOrderUnchanged:
     @pytest.mark.asyncio
-    async def test_both_denies_still_precede_any_side_effect(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_both_denies_still_precede_any_side_effect(self, tmp_path, monkeypatch) -> None:
         state = _dashboard_state(tmp_path)
         _running(state.get_or_create_slot(SLOT))
         events: list = []
         lines = _fences(monkeypatch, state, events=events)
-        async with TestClient(
-            TestServer(_wire_route(state, app_name="mail-bot"))
-        ) as client:
+        async with TestClient(TestServer(_wire_route(state, app_name="mail-bot"))) as client:
             await _press(client)
 
         assert [event[1] for event in events if event[0] == "deny"] == [

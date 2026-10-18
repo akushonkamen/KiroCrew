@@ -1766,15 +1766,19 @@ function JobDetailDialog({ job, prefill, prefillWrites, agents, defaultAgent, ro
                 fixed 200px: the dialog scrolls its own `max-h-[86vh]` body, so
                 a fixed short cap clipped a multi-line traceback to a sliver at
                 the dialog fold (#21061) -- the one line naming the failure was
-                the one that fell off. The `last_result` surface below carries
-                the same cap for the same reason. */}
+                the one that fell off. The cap alone is not enough: the notice
+                sits in the `DialogBody` flex column with `overflow-y-auto`,
+                which gives it `min-height: 0`, so a body short on room still
+                shrinks it below the cap -- `shrink-0` floors it. The
+                `last_result` surface below carries the same cap and the same
+                `shrink-0` for the same reason. */}
             {job?.last_error && (
               <>
                 {/* No hand-off: JobForm draft */}
                 <ErrorNotice
                   title={i18nT('pages.schedulePage.last_error')}
                   message={job.last_error}
-                  className="max-h-[min(45vh,420px)] overflow-y-auto font-mono"
+                  className="shrink-0 max-h-[min(45vh,420px)] overflow-y-auto font-mono"
                   testId="schedule-job-last-error"
                 />
               </>
@@ -1782,7 +1786,7 @@ function JobDetailDialog({ job, prefill, prefillWrites, agents, defaultAgent, ro
             {job && !job.last_error && job.last_result && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-[12px] text-muted font-medium">{i18nT('pages.schedulePage.last_output')}</div>
-                <pre className="text-[12px] font-mono whitespace-pre-wrap break-words rounded border px-2.5 py-2 max-h-[min(45vh,420px)] overflow-y-auto bg-bg-elevated border-border text-text">{job.last_result}</pre>
+                <pre className="text-[12px] font-mono whitespace-pre-wrap break-words rounded border px-2.5 py-2 shrink-0 max-h-[min(45vh,420px)] overflow-y-auto bg-bg-elevated border-border text-text">{job.last_result}</pre>
               </div>
             )}
             {job?.last_run_ts && (

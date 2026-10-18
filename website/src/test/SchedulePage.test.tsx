@@ -767,6 +767,10 @@ describe('SchedulePage failed-job error surface', () => {
 
     const notice = await screen.findByTestId('schedule-job-last-error')
     expect(notice.className).toContain('max-h-[min(45vh,420px)]')
+    // The cap is unreachable without a shrink floor: the notice sits in the
+    // DialogBody flex column with `overflow-y-auto`, so `min-height: 0` lets
+    // the column collapse it below the cap.
+    expect(notice.className).toContain('shrink-0')
     expect(notice.className).not.toContain('max-h-[200px]')
   })
 
@@ -784,6 +788,7 @@ describe('SchedulePage failed-job error surface', () => {
     const pre = (await screen.findByText('12 files copied')).closest('pre')
     expect(pre).not.toBeNull()
     expect(pre!.className).toContain('max-h-[min(45vh,420px)]')
+    expect(pre!.className).toContain('shrink-0')
     expect(pre!.className).not.toContain('max-h-[200px]')
   })
 })

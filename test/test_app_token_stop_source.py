@@ -1,12 +1,12 @@
 """App-token stops are audited as ``via: app:<app>``, not as the owner's press.
 
 ``POST /api/chat/slots/{slot}/stop`` is the layer holding the request an app
-token rides on (#20874): ``stop_slot_turn`` defaults ``source`` to ``"dashboard"``
+token rides on: ``stop_slot_turn`` defaults ``source`` to ``"dashboard"``
 and writes it into every ``dashboard_stop`` SEL line it logs as ``metadata.via``,
 so a route that omits ``source=`` audits an app's soft stop, its ``?force=true``
 escape and its escalated second press exactly like the owner pressing Stop in
-the dashboard. Since #19898 the embedded chat sends app-token stops for real,
-which turned that default into a live audit blind spot.
+the dashboard. The embedded chat sends app-token stops for real, so that
+default is a live audit blind spot.
 
 The tests drive the routed handler through a real aiohttp app whose middleware
 publishes the identity the deny checks already read, and pin three things:

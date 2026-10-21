@@ -791,7 +791,7 @@ async def api_chat_slot_stop(request: web.Request) -> web.Response:
     if denied is not None:
         return denied
     force = request.query.get("force", "").lower() == "true"
-    # The audit has to name who asked (#20874): ``stop_slot_turn`` defaults its
+    # The audit has to name who asked: ``stop_slot_turn`` defaults its
     # ``source`` to ``dashboard`` and logs it as the SEL line's ``via``, so the
     # default would audit an app's stop — soft, force or the escalated second
     # press — as the owner's dashboard press. This route is the only layer

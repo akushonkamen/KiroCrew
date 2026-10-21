@@ -1767,26 +1767,33 @@ function JobDetailDialog({ job, prefill, prefillWrites, agents, defaultAgent, ro
                 a fixed short cap clipped a multi-line traceback to a sliver at
                 the dialog fold (#21061) -- the one line naming the failure was
                 the one that fell off. The cap alone is not enough: the notice
-                sits in the `DialogBody` flex column with `overflow-y-auto`,
-                which gives it `min-height: 0`, so a body short on room still
-                shrinks it below the cap -- `shrink-0` floors it. The
-                `last_result` surface below carries the same cap and the same
-                `shrink-0` for the same reason. */}
+                sits in the `DialogBody` flex column, and the flex algorithm
+                can shrink a child below the cap when the body runs out of
+                room -- measured collapsing to a 16px one-line sliver on a
+                short viewport (#21061). Two independent guards hold it up:
+                `shrink-0` on the notice itself, and the plain block wrapper
+                here -- a block with visible overflow has an automatic
+                `min-height` of its content, so as a flex child it CANNOT
+                shrink below the notice's capped height even if the notice's
+                own `shrink-0` were lost. The wrapper, not the class, is the
+                structural guarantee; the `last_result` block below is floored
+                the same way by its own visible-overflow wrapper. */}
             {job?.last_error && (
-              <>
-                {/* No hand-off: JobForm draft */}
+              <div>
+                {/* No hand-off: JobForm draft. The wrapper is load-bearing:
+                    it reserves the notice's space in the flex column. */}
                 <ErrorNotice
                   title={i18nT('pages.schedulePage.last_error')}
                   message={job.last_error}
                   className="shrink-0 max-h-[min(45vh,420px)] overflow-y-auto font-mono"
                   testId="schedule-job-last-error"
                 />
-              </>
+              </div>
             )}
             {job && !job.last_error && job.last_result && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-[12px] text-muted font-medium">{i18nT('pages.schedulePage.last_output')}</div>
-                <pre className="text-[12px] font-mono whitespace-pre-wrap break-words rounded border px-2.5 py-2 shrink-0 max-h-[min(45vh,420px)] overflow-y-auto bg-bg-elevated border-border text-text">{job.last_result}</pre>
+                <pre data-testid="schedule-job-last-output" className="text-[12px] font-mono whitespace-pre-wrap break-words rounded border px-2.5 py-2 shrink-0 max-h-[min(45vh,420px)] overflow-y-auto bg-bg-elevated border-border text-text">{job.last_result}</pre>
               </div>
             )}
             {job?.last_run_ts && (

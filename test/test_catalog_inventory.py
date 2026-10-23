@@ -441,7 +441,8 @@ class TestAFailedListingFetchDoesNotGateTheInstall:
                 },
             )[1],
         )
-        row = oc.inventory_for_install("demo-app")
+        with oc.install_attempt():
+            row = oc.inventory_for_install("demo-app")
         assert row is not None
         assert row["commit"] == SHA
         assert calls, "the install click must make a real fetch attempt, not refuse from memory"
@@ -470,7 +471,7 @@ class TestAFailedListingFetchDoesNotGateTheInstall:
         monkeypatch.setattr(oc, "_read_cache", lambda: {oc._FAILED_KEY: 1.0})
         monkeypatch.setattr(oc, "fetch_document", lambda url: None)
         monkeypatch.setattr(oc, "_write_failure", lambda: writes.append({}))
-        with pytest.raises(oc.CatalogUnavailable):
+        with oc.install_attempt(), pytest.raises(oc.CatalogUnavailable):
             oc.inventory_for_install("demo-app")
         assert writes, "the failed install-time fetch must refresh the listing's back-off"
 
@@ -483,6 +484,36 @@ class TestAFailedListingFetchDoesNotGateTheInstall:
         with pytest.raises(oc.CatalogUnavailable):
             oc.fetch_inventory_entries()
         assert calls == [], "the listing must keep its FAILURE_TTL back-off"
+
+    def test_a_per_app_lookup_still_honours_the_backoff(self, monkeypatch):
+        """`inventory_for_install` also answers per-app lookups (the app list's
+        trust stamping, the Security panel, update candidates). By default they
+        keep failing at once from the sentinel during an outage, instead of each
+        waiting out a fetch timeout on every refresh."""
+        calls: list[str] = []
+        monkeypatch.setattr(oc, "_read_cache", lambda: {oc._FAILED_KEY: 1.0})
+        monkeypatch.setattr(oc, "fetch_document", lambda url: (calls.append(url), None)[1])
+        with pytest.raises(oc.CatalogUnavailable):
+            oc.inventory_for_install("demo-app")
+        assert calls == []
+
+    def test_only_the_install_entry_bypasses_the_backoff(self, monkeypatch):
+        """The install itself (`_resolve_install_entry`, for an app with no
+        recorded source) is the one caller that asks for the bypass."""
+        from kiro_crew.apps.registry_pipeline import catalog as rp_catalog
+
+        seen: list[bool] = []
+
+        def lookup(name):
+            seen.append(oc._INSTALL_ATTEMPT.get())
+            return {"name": name}
+
+        monkeypatch.setattr(rp_catalog, "get_app", lambda name: None)
+        monkeypatch.setattr(rp_catalog, "get_registry_app", lookup)
+        entry, error = rp_catalog._resolve_install_entry("demo-app")
+        assert entry == {"name": "demo-app"} and error == ""
+        assert seen == [True], "the install's own lookup runs inside install_attempt()"
+        assert oc._INSTALL_ATTEMPT.get() is False, "the mark does not outlive the lookup"
 
 
 class TestCredentialPosture:

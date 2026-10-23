@@ -486,10 +486,25 @@ class TestTruncatedResponsesAreRetried:
     """
 
     @pytest.fixture(autouse=True)
-    def _no_sleep(self, monkeypatch):
-        """The back-off is real in production; the suite should not wait it out."""
+    def _no_sleep(self, _floor_monkeypatch):
+        """The back-off is real in production; the suite should not wait it out.
+
+        Only the module under test's own ``time`` binding is replaced, with a
+        namespace that delegates everything but ``sleep`` to the real module:
+        patching the stdlib ``time`` would hand every thread in the worker an
+        instant sleep while the test runs.
+        """
         slept: list[float] = []
-        monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
+
+        class _RecordingTime:
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+            @staticmethod
+            def sleep(seconds: float) -> None:
+                slept.append(seconds)
+
+        _floor_monkeypatch.setattr(oc, "time", _RecordingTime())
         self.slept = slept
 
     def test_a_short_read_is_detected_and_retried(self, monkeypatch):
@@ -580,6 +595,101 @@ class TestTruncatedResponsesAreRetried:
         )
         assert oc._download() == doc()
         assert len(calls) == 1, "a garbage length is not a truncation and earns no retry"
+
+    def test_a_content_length_past_the_int_digit_limit_is_ignored(self, monkeypatch):
+        """A decimal ``Content-Length`` longer than CPython's integer-string
+        limit (4300 digits) passes ``isdecimal`` yet makes ``int()`` raise. It
+        must read as "no declared length", not escape as ``ValueError`` and
+        replace the storefront's offline-seed fallback with a failed request."""
+        good = json.dumps(doc()).encode("utf-8")
+        calls: list[str] = []
+        monkeypatch.setattr(
+            oc,
+            "_open_catalog",
+            lambda req: (calls.append(str(req.full_url)), _CannedResp(good, "9" * 5000))[1],
+        )
+        assert oc._download() == doc()
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("code", [404, 503])
+    def test_an_http_error_status_is_not_retried(self, monkeypatch, code):
+        """`build_opener` RAISES `HTTPError` for a 4xx/5xx (a `URLError`
+        subclass), so the answer never reaches the status check. A server that
+        answered gets one request."""
+        calls: list[str] = []
+
+        def refuse(req):
+            calls.append(str(req.full_url))
+            raise urllib.error.HTTPError(str(req.full_url), code, "nope", {}, None)
+
+        monkeypatch.setattr(oc, "_open_catalog", refuse)
+        assert oc._download() is None
+        assert len(calls) == 1
+        assert self.slept == []
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            urllib.error.URLError(TimeoutError("timed out")),
+            TimeoutError("read timed out"),
+            urllib.error.URLError(ConnectionRefusedError("refused")),
+            urllib.error.URLError("name resolution failed"),
+        ],
+        ids=["connect-timeout", "read-timeout", "refused", "dns"],
+    )
+    def test_a_dead_origin_costs_one_attempt(self, monkeypatch, exc):
+        """A timeout or refusal is what an OUTAGE looks like. Retrying it would
+        turn one ``FETCH_TIMEOUT`` into several on every store load and install
+        click during the outage, so it fails on the first attempt."""
+        calls: list[str] = []
+
+        def dead(req):
+            calls.append(str(req.full_url))
+            raise exc
+
+        monkeypatch.setattr(oc, "_open_catalog", dead)
+        assert oc._download() is None
+        assert len(calls) == 1
+        assert self.slept == []
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            urllib.error.URLError(ConnectionResetError("reset by peer")),
+            ConnectionResetError("reset during read"),
+            http.client.IncompleteRead(b"partial", 10),
+        ],
+        ids=["wrapped-reset", "read-reset", "incomplete-chunk"],
+    )
+    def test_a_cut_connection_is_retried(self, monkeypatch, exc):
+        good = json.dumps(doc()).encode("utf-8")
+        responses: list[object] = [exc, _CannedResp(good, len(good))]
+
+        def canned(req):
+            item = responses.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(oc, "_open_catalog", canned)
+        assert oc._download() == doc()
+        assert not responses
+
+    def test_an_oversized_document_with_its_true_length_is_not_retried(self, monkeypatch, caplog):
+        """The capped read returns ``MAX_BYTES + 1`` bytes of a larger declared
+        body: shorter than ``Content-Length``, but oversized, not truncated."""
+        big = b"x" * (oc.MAX_BYTES + 10)
+        calls: list[str] = []
+        monkeypatch.setattr(
+            oc,
+            "_open_catalog",
+            lambda req: (calls.append(str(req.full_url)), _CannedResp(big, len(big)))[1],
+        )
+        with caplog.at_level("WARNING", logger=oc.logger.name):
+            assert oc._download() is None
+        assert len(calls) == 1
+        assert "exceeds" in caplog.text
+        assert "truncated response" not in caplog.text
 
     def test_a_complete_body_is_never_retried(self, monkeypatch):
         """The retry exists for transient transport faults; a full response that

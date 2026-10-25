@@ -71,6 +71,47 @@ function toNoProxyEntry(entry) {
 }
 
 /**
+ * True when a macOS exception is a wildcard a NO_PROXY suffix cannot express.
+ *
+ * Only a leading `*.` maps onto a suffix. Any other wildcard (`*`, `*.*`,
+ * `10.*`, `host*.corp`) bypasses hosts that NO_PROXY would send through the
+ * proxy, and once a proxy variable is set the system's own matcher is no
+ * longer asked. Exporting a narrower bypass than the system's would route
+ * direct-only traffic through the proxy, so discovery gives up instead and
+ * the inherited environment stands.
+ *
+ * @param {string} entry
+ * @returns {boolean}
+ */
+function isUnrepresentableWildcard(entry) {
+  if (!entry.includes("*")) return false;
+  const rest = entry.startsWith("*.") ? entry.slice(2) : entry;
+  return rest === "" || rest.includes("*");
+}
+
+// macOS ships `169.254/16` in every default ExceptionsList. It is the one CIDR
+// entry dropped instead of stopping discovery: link-local hosts sit on the
+// local segment, the gateway has no link-local destination on a Mac, and
+// refusing it would turn discovery off on nearly every Mac (issue #19821).
+const DEFAULT_LINK_LOCAL_BYPASS = "169.254/16";
+
+/**
+ * True when a macOS exception is a CIDR range NO_PROXY cannot express.
+ *
+ * Python's urllib matches `NO_PROXY` by host name only, while the macOS
+ * matcher it replaces resolves the host and checks the range. A `10/8`
+ * bypass dropped from the export would send private-subnet traffic through
+ * the proxy, so any CIDR entry other than the default link-local one stops
+ * discovery.
+ *
+ * @param {string} entry
+ * @returns {boolean}
+ */
+function isUnrepresentableCidr(entry) {
+  return entry.includes("/") && entry !== DEFAULT_LINK_LOCAL_BYPASS;
+}
+
+/**
  * Parse the `ExceptionsList` array out of a `scutil --proxy` dump.
  *
  * Both print shapes are handled separately, because one lax regex over both
@@ -98,6 +139,41 @@ function parseExceptionsList(text) {
 }
 
 /**
+ * Keep only the top-level keys of a `scutil --proxy` dump.
+ *
+ * Nested dictionaries (`__SCOPED__` per interface, `__SUPPLEMENTAL__` per
+ * match domain) hold proxies that apply only to that interface or domain.
+ * Reading their keys would export a domain-only proxy for every host, so they
+ * are cut out. The top-level `ExceptionsList` array is kept whole.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function topLevelKeys(text) {
+  const kept = [];
+  let depth = 0;
+  let keptBlockDepth = null;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("}")) {
+      depth -= 1;
+      if (keptBlockDepth !== null && depth === keptBlockDepth) {
+        kept.push(line);
+        keptBlockDepth = null;
+        continue;
+      }
+    }
+    const inKeptBlock = keptBlockDepth !== null;
+    if (depth <= 1 || inKeptBlock) kept.push(line);
+    if (trimmed.endsWith("{")) {
+      if (!inKeptBlock && depth <= 1 && /^ExceptionsList\s*:/.test(trimmed)) keptBlockDepth = depth;
+      depth += 1;
+    }
+  }
+  return kept.join("\n");
+}
+
+/**
  * Turn a `scutil --proxy` dump into the standard proxy environment variables.
  *
  * Only protocols the system actually enables are emitted, and only with a
@@ -115,8 +191,9 @@ function parseExceptionsList(text) {
  * @param {string | null | undefined} text
  * @returns {NodeJS.ProcessEnv | null}
  */
-function proxyEnvFromScutilOutput(text) {
-  if (typeof text !== "string" || text.trim() === "") return null;
+function proxyEnvFromScutilOutput(dump) {
+  if (typeof dump !== "string" || dump.trim() === "") return null;
+  const text = topLevelKeys(dump);
 
   const scalar = (key) => {
     const match = text.match(new RegExp(`^\\s*${key}\\s*:\\s*(.*?)\\s*$`, "m"));
@@ -151,8 +228,15 @@ function proxyEnvFromScutilOutput(text) {
 
   const listed = parseExceptionsList(text);
   // A bare `*` bypasses the proxy for every host: the system says "connect
-  // directly", so there is nothing to discover.
-  if (listed.includes("*")) return null;
+  // directly", so there is nothing to discover. Any other wildcard NO_PROXY
+  // cannot express (`*.*`, `10.*`) would leave a narrower bypass than the
+  // system's, so it falls through the same way.
+  if (listed.some(isUnrepresentableWildcard)) return null;
+  // The same holds for a private CIDR range and for "Bypass proxy settings
+  // for these Hosts & Domains: simple hostnames" (ExcludeSimpleHostnames),
+  // which NO_PROXY has no spelling for.
+  if (listed.some(isUnrepresentableCidr)) return null;
+  if (enabled("ExcludeSimpleHostnames")) return null;
   const exceptions = listed.map(toNoProxyEntry).filter((entry) => entry !== null);
   env.NO_PROXY = [...new Set([...exceptions, ...LOOPBACK_BYPASS])].join(",");
   return env;

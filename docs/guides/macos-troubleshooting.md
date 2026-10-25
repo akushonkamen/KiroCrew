@@ -196,9 +196,13 @@ connectors, not only chat.
 A manual HTTP or HTTPS proxy you configured in System Settings therefore needs
 no extra step. `NO_PROXY` always includes `localhost`, `127.0.0.1` and `::1`;
 the System Settings bypass list is copied with `*.example` rewritten to
-`.example`, and CIDR entries such as `169.254/16` are left out because
-`NO_PROXY` readers do not understand them. A bypass list with a bare `*`
-means "connect directly", so nothing is set. Only the uppercase names are
+`.example`, and the default link-local entry `169.254/16` is left out because
+`NO_PROXY` readers do not understand ranges. A bypass list with a bare `*`
+means "connect directly", so nothing is set. Anything else `NO_PROXY` cannot
+express also sets nothing: a wildcard such as `*.*` or `10.*`, any other
+range such as `10/8`, or "Bypass proxy settings for simple hostnames". That
+way traffic the system sends direct is never forced through the proxy; set
+`HTTPS_PROXY` and `NO_PROXY` yourself with `launchctl setenv` in that case. Only the uppercase names are
 set, so a proxy you put in `agent.env` (written in uppercase) fully replaces
 the discovered one for agents. Any proxy variable already in the
 environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or `NO_PROXY`, in either

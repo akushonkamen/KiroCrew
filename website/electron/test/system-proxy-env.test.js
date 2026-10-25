@@ -123,7 +123,6 @@ test("macOS exception syntax becomes NO_PROXY syntax", () => {
     1 : *.corp.example
     2 : 169.254/16
     3 : intranet.example
-    4 : *.*
   }
 }
 `);
@@ -131,6 +130,63 @@ test("macOS exception syntax becomes NO_PROXY syntax", () => {
     env.NO_PROXY,
     ".local,.corp.example,intranet.example,localhost,127.0.0.1,::1",
   );
+});
+
+test("a wildcard NO_PROXY cannot express discovers nothing", () => {
+  // `*.*` or `10.*` bypasses hosts a NO_PROXY suffix list would proxy. Once
+  // HTTP_PROXY is set, urllib stops asking the system matcher, so exporting a
+  // narrower bypass would send direct-only traffic through the proxy.
+  for (const wildcard of ["*.*", "10.*", "host*.corp.example", "*."]) {
+    assert.equal(
+      proxyEnvFromScutilOutput(`<dictionary> {
+  HTTPSEnable : 1
+  HTTPSPort : 3128
+  HTTPSProxy : 10.0.0.1
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : ${wildcard}
+  }
+}
+`),
+      null,
+      `exception ${wildcard} must stop discovery`,
+    );
+  }
+});
+
+test("a private CIDR bypass NO_PROXY cannot express discovers nothing", () => {
+  // urllib matches NO_PROXY by name; the macOS matcher it replaces checks the
+  // resolved address against the range. Only the default link-local entry is
+  // dropped; any other range stops discovery.
+  for (const cidr of ["10/8", "192.168.0.0/16", "172.16/12", "fd00::/8"]) {
+    assert.equal(
+      proxyEnvFromScutilOutput(`<dictionary> {
+  HTTPSEnable : 1
+  HTTPSPort : 3128
+  HTTPSProxy : 10.0.0.1
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : 169.254/16
+    2 : ${cidr}
+  }
+}
+`),
+      null,
+      `exception ${cidr} must stop discovery`,
+    );
+  }
+});
+
+test("ExcludeSimpleHostnames discovers nothing, since NO_PROXY cannot say it", () => {
+  const dump = (flag) => `<dictionary> {
+  ExcludeSimpleHostnames : ${flag}
+  HTTPSEnable : 1
+  HTTPSPort : 3128
+  HTTPSProxy : 10.0.0.1
+}
+`;
+  assert.equal(proxyEnvFromScutilOutput(dump(1)), null);
+  assert.equal(proxyEnvFromScutilOutput(dump(0)).HTTPS_PROXY, "http://10.0.0.1:3128");
 });
 
 test("no manual proxy (PAC or disabled) discovers nothing", () => {
@@ -171,6 +227,64 @@ test("an enabled protocol without a usable host:port pair is skipped", () => {
 }
 `);
   assert.equal(env, null, "a port of 0 is not a proxy endpoint");
+});
+
+test("a proxy scoped to a domain or interface is never exported globally", () => {
+  // A VPN can set an HTTPS proxy only for its corporate domains, under
+  // __SUPPLEMENTAL__. Exporting it as HTTPS_PROXY would send every public
+  // model request through a proxy meant for those domains only.
+  assert.equal(
+    proxyEnvFromScutilOutput(`<dictionary> {
+  HTTPEnable : 0
+  HTTPSEnable : 0
+  __SCOPED__ : <dictionary> {
+    utun3 : <dictionary> {
+      HTTPEnable : 1
+      HTTPPort : 3128
+      HTTPProxy : scoped.corp.example
+    }
+  }
+  __SUPPLEMENTAL__ : <array> {
+    0 : <dictionary> {
+      HTTPSEnable : 1
+      HTTPSPort : 8443
+      HTTPSProxy : vpn-proxy.corp.example
+      ExceptionsList : <array> {
+        0 : *
+      }
+      MatchDomain : corp.example
+    }
+  }
+}
+`),
+    null,
+  );
+
+  // A top-level proxy still wins, and nested keys never leak into it.
+  const env = proxyEnvFromScutilOutput(`<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+  }
+  __SUPPLEMENTAL__ : <array> {
+    0 : <dictionary> {
+      ExceptionsList : <array> {
+        0 : *
+      }
+      HTTPSEnable : 1
+      HTTPSPort : 8443
+      HTTPSProxy : vpn-proxy.corp.example
+      MatchDomain : corp.example
+    }
+  }
+  HTTPSEnable : 1
+  HTTPSPort : 3128
+  HTTPSProxy : proxy.corp.example
+}
+`);
+  assert.deepStrictEqual(env, {
+    HTTPS_PROXY: "http://proxy.corp.example:3128",
+    NO_PROXY: ".local,localhost,127.0.0.1,::1",
+  });
 });
 
 test("an older inline ExceptionsList form parses too", () => {
